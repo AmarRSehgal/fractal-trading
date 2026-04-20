@@ -330,24 +330,45 @@ Every strategy must pass:
 
 ---
 
-## Roadmap (revised after first empirical pass)
+## Roadmap (revised after second empirical pass - 2026-04-20)
 
-Ordered by what to do next:
-
+Done:
 - [x] DFA + modified R/S estimators, validated on synthetic fBm and AR(1).
 - [x] FFD + d-picker, validated on random walk.
 - [x] yfinance data loader with parquet cache.
-- [x] Cross-sectional sort backtest harness.
-- [x] Hurst distribution on S&P 100 (diagnostic).
-- [x] Hurst sort backtest on S&P 100 (S1).
-- [x] Frac-diff vs momentum head-to-head on S&P 100 (preliminary A3 test).
-- [ ] Extend S1 to Russell 2000 / 3000 (wider H dispersion expected).
-- [ ] Add transaction cost model and survivorship haircut to backtest output.
-- [ ] Bootstrap CI on Sharpe for all reported strategy results.
-- [ ] Build S2 proper: frac-diff in gradient boosting with walk-forward CV.
-- [ ] Build S3: Lo-filtered universe.
-- [ ] Intraday hourly-bar seasonality (S4) on watchlist.
-- [ ] MF-DFA on SPX and sector ETFs (A5).
-- [ ] Carr-Madan BS and Heston pricers (B1) — educational only.
+- [x] Cross-sectional sort backtest harness **with bootstrap CI and TC model**.
+- [x] Hurst distribution diagnostic on S&P 100 (narrow - ~Lo 1991 finding).
+- [x] Hurst sort on S&P 100 (S1).
+- [x] **Hurst sort on S&P 600 (small caps).** Same narrow distribution,
+  Sharpe -0.22 net of costs, 95% CI straddles zero. Null.
+- [x] Frac-diff as standalone cross-sectional factor (A3): null.
+- [x] **S2 proper: FFD + momentum + vol features in LightGBM with 22-day
+  embargoed walk-forward.** Initial Sharpe 1.84 WAS LEAKAGE. After embargo
+  fix: Sharpe 0.015 / -0.08 net. Null.
+- [x] **S4 intraday hourly seasonality.** Open hour has 2.4x mean |return|.
+  Classical microstructure reproduced. Execution alpha only.
 
-Updates will be appended to `RESULTS.md` as each idea reports numbers.
+Nearly pointless given null findings (deprioritized):
+- [ ] S3 Lo-filtered trend universe (expected to also be null given the
+  tight H dispersion we've seen repeatedly).
+
+Still worth doing:
+- [ ] **ETF-level H sort** - never tested. Country/sector/style ETFs might
+  show wider H dispersion than individual stocks because they aggregate
+  noise. If anything in this family would work, it is this.
+- [ ] **Reality-check the S4 intraday result on a real broker** - even 1-2
+  bps per trade is compounding over a year of active trading.
+- [ ] MF-DFA on SPX vs VIX (A5) for volatility regime - diagnostic, not
+  directional.
+- [ ] Carr-Madan BS/Heston pricer (B1) - purely educational at this point.
+
+## The lesson to encode going forward
+
+Four directional fractal ideas, four nulls. The infrastructure (bootstrap
+CI, cost model, walk-forward with embargo) is the durable win from this
+project. The GBM embargo bug (Sharpe went from 1.84 to 0.015 after fix) is
+the single most valuable artifact here: **any future walk-forward
+backtest in this repo must have its embargo examined before we celebrate a
+Sharpe**.
+
+Updates are appended to [`RESULTS.md`](RESULTS.md).

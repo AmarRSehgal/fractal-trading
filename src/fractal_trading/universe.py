@@ -12,14 +12,55 @@ import pandas as pd
 
 
 SP500_WIKI = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+SP400_WIKI = "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
+SP600_WIKI = "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies"
+
+
+def _from_wiki(url: str, symbol_col: str = "Symbol") -> list[str]:
+    import io
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req) as resp:
+        html = resp.read().decode()
+    tables = pd.read_html(io.StringIO(html))
+    for t in tables:
+        if symbol_col in t.columns:
+            tickers = t[symbol_col].astype(str).str.replace(".", "-", regex=False).tolist()
+            return sorted(set(tickers))
+    raise ValueError(f"No '{symbol_col}' column found in tables at {url}")
 
 
 def sp500_tickers() -> list[str]:
     """Current S&P 500 tickers via Wikipedia. Survivorship-biased."""
-    tables = pd.read_html(SP500_WIKI)
-    df = tables[0]
-    tickers = df["Symbol"].str.replace(".", "-", regex=False).tolist()
-    return sorted(set(tickers))
+    return _from_wiki(SP500_WIKI, "Symbol")
+
+
+def sp400_tickers() -> list[str]:
+    """Current S&P 400 (mid-cap) tickers. Survivorship-biased."""
+    return _from_wiki(SP400_WIKI, "Symbol")
+
+
+def sp600_tickers() -> list[str]:
+    """Current S&P 600 (small-cap) tickers. Survivorship-biased."""
+    return _from_wiki(SP600_WIKI, "Symbol")
+
+
+def sp1500_tickers() -> list[str]:
+    """Current S&P 500 + 400 + 600 = 1500 stocks. Survivorship-biased."""
+    return sorted(set(sp500_tickers()) | set(sp400_tickers()) | set(sp600_tickers()))
+
+
+def liquid_watchlist() -> list[str]:
+    """Handful of very liquid US stocks / ETFs for intraday studies."""
+    return sorted({
+        "SPY", "QQQ", "IWM", "DIA",
+        "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA",
+        "AMD", "AVGO", "NFLX", "INTC",
+        "JPM", "BAC", "GS",
+        "XOM", "CVX",
+        "WMT", "COST", "HD",
+        "JNJ", "UNH", "LLY",
+    })
 
 
 def dow30_tickers() -> list[str]:

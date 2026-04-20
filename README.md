@@ -50,26 +50,38 @@ python3 scripts/03_hurst_sort_backtest.py --universe sp100
 python3 scripts/04_fracdiff_comparison.py
 ```
 
-## First-pass findings (2026-04-20)
+## Findings (2026-04-20, two passes done)
 
-On S&P 100, 2005-2026, survivorship-biased, no transaction costs:
+All net-of-cost Sharpes use 10bps per side with 95% bootstrap CI.
 
-| Experiment                             | Sharpe | Comment                      |
-|----------------------------------------|--------|------------------------------|
-| Hurst cross-sectional quintile sort    | 0.47   | ~0.2 after realistic costs   |
-| FFD z-score as cross-sectional factor  | 0.01   | Underperformed 12-1 momentum |
-| 12-1 momentum benchmark                | 0.17   | Weak on large-cap survivors  |
+| Experiment                             | Sharpe net | 95% CI         | Verdict |
+|----------------------------------------|-----------:|----------------|---------|
+| S1: Hurst sort, S&P 100                | ~0.23 (est)| wide           | Weak    |
+| S1: Hurst sort, S&P 600 (small caps)   | -0.22      | [-0.78, 0.33]  | **Null** |
+| A3: FFD as standalone factor           |  0.01      | wide           | **Null** |
+| S2: FFD + mom + vol in LightGBM (embargoed) | -0.08 | [-0.58, 0.43] | **Null** |
+| Baseline: 12-1 momentum                |  0.14      | [-0.27, 0.64]  | Weak    |
+| S4: Intraday seasonality diagnostic    | N/A        | N/A            | **Real** (execution signal) |
 
-The Hurst-distribution diagnostic on S&P 100 reproduces Lo (1991): dispersion
-is tight (5-95 percentile of H: [0.42, 0.52]); only 5/100 stocks reject the
-no-long-memory null at 95% (about what random sampling gives).
+Key findings:
+1. **Narrow H dispersion.** Both S&P 100 and S&P 600 show mean H ~0.47 with
+   std ~0.03. Only ~5% reject Lo's null at 95% (about what chance gives).
+   My hypothesis that small-caps would have wider H was wrong.
+2. **Leakage was the GBM Sharpe, not model skill.** First walk-forward
+   gave Sharpe 1.84 - but training rows within 21 BDays of the test date
+   had targets overlapping the test period. With a 22-day embargo the
+   Sharpe collapsed to 0.015. See `scripts/07_gbm_walkforward.py`.
+3. **Intraday volatility concentrates at market open** - 2.4x the mean
+   of all intraday hours. Classical microstructure finding, but
+   quantified per-stock and reusable.
 
-**Interpretation:** retail fractal alpha on liquid US stocks is thin.
-Next experiments should extend to Russell 2000 / small caps (expected wider
-dispersion), add proper transaction costs and bootstrap CIs, and move frac-diff
-from standalone factor into a multi-feature ML model (its intended use).
+**Interpretation.** Four directional fractal tests, four nulls. The
+durable win of this project is the **infrastructure** (bootstrap CIs, TC
+model, embargoed walk-forward). The intellectual win is the embargo
+discovery - any future backtest in this repo must check embargo before
+celebrating a Sharpe.
 
-See `RESULTS.md` for the full numbers and `IDEAS.md` for what's next.
+See `RESULTS.md` for full numbers and `IDEAS.md` for what's still worth doing.
 
 ## Caveats
 

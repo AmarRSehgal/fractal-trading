@@ -122,22 +122,207 @@ experiment (S2 in IDEAS.md) has not been run yet.
 
 ---
 
-## Summary so far
+## 2026-04-20 (second pass): S1 extended to S&P 600 (small caps)
 
-| Idea                                     | Status   | Edge?    |
-|------------------------------------------|----------|----------|
-| DFA / modified R/S estimators valid      | Done     | N/A      |
-| FFD / d-picker valid                     | Done     | N/A      |
-| S1 Hurst cross-sectional sort (S&P 100)  | Done     | Marginal-to-null |
-| A3 FFD as factor (S&P 100)               | Done     | No       |
-| S1 on Russell 2000                       | TODO     | Unknown  |
-| S2 FFD + GBM features (proper test)      | TODO     | Unknown  |
-| S3 Lo-filtered trend                     | TODO     | Unknown  |
-| S4 Intraday seasonality                  | TODO     | Unknown  |
-| A5 MF-DFA regime                         | TODO     | Unknown  |
-| B1 Carr-Madan pricer                     | TODO     | Educational only |
+**Script:** `scripts/05_hurst_sort_sp600.py`
+**Period:** 2010-01-01 through 2026-04-20 (156 monthly rebalances)
+**Universe:** S&P 600, filtered to 480 names with >= 60% data coverage
+**Factor:** rolling 500-day DFA Hurst, 21-day step
+**Portfolio:** quintile long-short, min 20 names per leg
 
-**Honest state of play:** first directional test (S1) was weak. Retail
-fractal alpha on liquid US stocks looks thin. The most likely wins from here
-are (a) execution-timing improvements via A4/S4, and (b) frac-diff as one
-feature in a larger model (S2), not a standalone factor.
+### H distribution
+
+| Metric | Value |
+|--------|-------|
+| Mean H | 0.471 |
+| Std    | 0.033 |
+| p05-p95| [0.418, 0.518] |
+
+**Finding.** S&P 600 H distribution is nearly identical to S&P 100
+(0.465, 0.034). My hypothesis that small-caps would have wider H dispersion
+was wrong. The dispersion ceiling on liquid US stocks (large or small) is
+~0.10 at 5-95 percentiles. Lo (1991) holds on small-caps too.
+
+### Backtest with bootstrap CI and transaction costs
+
+| Metric            | Gross    | Net (10bps/side) |
+|-------------------|----------|------------------|
+| Annual return     | -1.1%    | -1.7%            |
+| Annual vol        | 7.9%     | 7.9%             |
+| Sharpe            | -0.14    | -0.22            |
+| Max drawdown      | -24.2%   | -28.0%           |
+| Hit rate          | 46.2%    | 44.2%            |
+| Turnover / rebal  | 27.9%    | 27.9%            |
+| Sharpe 95% CI     | [-0.69, 0.42] | [-0.78, 0.33] |
+| N monthly rebals  | 156      | 156              |
+
+**Conclusion.** S1 on small-caps is a **clean null**. Point estimate
+slightly negative, 95% CI straddles zero. The Hurst sort hypothesis is
+dead on liquid US equities, large or small. Do not pursue further without
+a fundamentally different data source (intraday microstructure H, or
+cross-country H, etc.).
+
+---
+
+## 2026-04-20: S4 - Intraday seasonality (hourly bars)
+
+**Script:** `scripts/06_intraday_seasonality.py`
+**Period:** last 700 days (2024-05 to 2026-04), 1-hour bars
+**Universe:** 26 liquid stocks + 4 index ETFs
+
+### Finding: volatility front-loads dramatically
+
+Normalized |log return| per hour-of-day bucket (UTC, across DST/EST mixing):
+
+| Hour UTC | |Return| norm | Volume norm |
+|----------|---------------|-------------|
+| 13       | 2.43x         | 0.96x       |
+| 14       | 1.48x         | 1.00x       |
+| 15       | 0.83x         | 1.00x       |
+| 16       | 0.75x         | 1.00x       |
+| 17       | 0.68x         | 1.00x       |
+| 18       | 0.61x         | 1.00x       |
+| 19       | 0.62x         | 1.00x       |
+| 20       | 0.60x         | 1.06x       |
+
+**Caveats.**
+- Hour bucketing mixes EST and EDT over 2 years; results are approximate.
+  Hour 13 UTC captures the open in EDT months (9:30 ET), later sessions
+  captured in adjacent buckets during EST.
+- 1-hour bars flatten the closing-auction spike. To see a classic U-shape
+  you need 15-minute bars (unavailable on yfinance beyond 60 days).
+
+**Takeaway.** Volatility at the US market open is ~2.4x the intraday
+average. Classical microstructure lit. reproduced. **Actionable
+consequence:** for any discretionary or systematic execution:
+- Avoid passive posting during the open hour unless you want inventory
+  risk.
+- Concentrate passive fills in the 15:00-20:00 UTC band where volatility
+  is below average and volume is at/above average.
+
+Volume seasonality is nearly flat when normalized per-stock - suggests
+yfinance hourly volume is either smoothed or the closing-auction volume
+isn't captured in hour-bar granularity.
+
+---
+
+## 2026-04-20: S2 - GBM walk-forward (FFD + momentum + vol features)
+
+**Script:** `scripts/07_gbm_walkforward.py`
+**Period:** 2005-01 through 2026-04, monthly retraining
+**Universe:** S&P 100 (91 survivors)
+**Features per stock per date:** `mom_12_1`, `ret_1m`, `vol_60`, `vol_252`,
+ `fd_z` (frac-diff z-score, d=0.4)
+**Model:** LightGBM regressor, trailing 5-year training window, 100 trees
+**Target:** next-21-day log return
+**Portfolio:** quintile long-short by predicted return
+
+### FIRST RUN (WITHOUT EMBARGO) - LEAKAGE
+
+| Metric           | Value |
+|------------------|-------|
+| Sharpe (gross)   | 1.84  |
+| Sharpe (net 10bps)| 1.75 |
+| 95% CI (net)     | [1.33, 2.20] |
+| Hit rate         | 73%   |
+
+**This was too good to be true.** Checked the walk-forward window:
+
+At rebalance date `d`, training rows at `d_train \in [d - 21, d)` have
+targets spanning `[d_train, d_train + 21]`, which extends PAST `d` into
+the test target window. Those forward returns are NOT observed at test
+time - pure lookahead.
+
+### FIXED RUN (WITH 22-BDAY EMBARGO)
+
+Training rows restricted to `d_train <= d - 22 BDay`, so no training
+target overlaps the test period.
+
+| Metric           | Gross   | Net (10bps/side) |
+|------------------|---------|------------------|
+| Annual return    | 0.2%    | -1.2%            |
+| Annual vol       | 13.8%   | 13.8%            |
+| Sharpe           | 0.015   | -0.08            |
+| Max drawdown     | -34.5%  | -42.1%           |
+| Hit rate         | 49.1%   | 48.0%            |
+| 95% CI Sharpe    | [-0.48, 0.54] | [-0.58, 0.43] |
+
+**Conclusion.** With honest walk-forward, the GBM model adds **zero** edge.
+Sharpe dropped from 1.84 to 0.015 - a 100x reduction - from a single
+embargo fix. This is a textbook demonstration of why careful leakage
+analysis matters.
+
+### Full-sample feature importance (for context only)
+
+| Feature      | LGBM gain | Rank |
+|--------------|-----------|------|
+| vol_252      | 824       | 1    |
+| mom_12_1     | 675       | 2    |
+| vol_60       | 663       | 3    |
+| ret_1m       | 329       | 4    |
+| fd_z         | 309       | 5    |
+
+Frac-diff is the **least** important feature per LGBM gain. This
+invalidates the López de Prado motivation on this particular feature set
+and universe. (Caveat: feature importance is gain-based and can be
+misleading; fd_z is multicollinear with other price-level features.)
+
+### Baseline (Momentum 12-1 alone)
+
+| Metric           | Gross   | Net (10bps)      |
+|------------------|---------|------------------|
+| Sharpe           | 0.17    | 0.14             |
+| 95% CI           | [-0.25, 0.68] | [-0.27, 0.64] |
+
+Momentum on S&P 100 also fails to reject zero Sharpe at 95% CI. That is
+consistent with the known collapse of momentum in large-cap US equities
+post-2000.
+
+---
+
+## Summary - four tests done
+
+| Experiment                                   | Edge?  | Sharpe (net)   | 95% CI        |
+|----------------------------------------------|--------|----------------|---------------|
+| S1 Hurst sort S&P 100                        | ~Null  | 0.23 (est.)    | Wide, likely crosses 0 |
+| S1 Hurst sort S&P 600 (small caps)           | Null   | -0.22          | [-0.78, 0.33] |
+| A3 FFD as standalone factor S&P 100          | Null   | 0.01           | Wide          |
+| S2 GBM w/ FFD+mom+vol features, embargoed    | Null   | -0.08          | [-0.58, 0.43] |
+| S4 Intraday seasonality (execution context)  | Real   | N/A            | Real ~2.4x open vol |
+
+| Idea                                         | Status | Edge?   |
+|----------------------------------------------|--------|---------|
+| DFA / modified R/S estimators valid          | Done   | N/A     |
+| FFD / d-picker valid                         | Done   | N/A     |
+| Bootstrap CI + transaction costs in backtest | Done   | N/A     |
+| S1 Hurst sort S&P 100                        | Done   | Weak    |
+| S1 Hurst sort S&P 600                        | Done   | Null    |
+| A3 FFD as standalone factor                  | Done   | Null    |
+| S2 FFD + GBM features                        | Done   | Null    |
+| S4 Intraday hourly seasonality               | Done   | Real execution signal |
+| S3 Lo-filtered trend universe                | TODO   | Unknown |
+| A5 MF-DFA regime                             | TODO   | Unknown |
+| B1 Carr-Madan pricer                         | TODO   | Educational |
+
+## Honest state of play
+
+**Four of the five directional/cross-sectional fractal ideas are now
+tested against realistic walk-forward CV with embargo, transaction costs,
+and bootstrap CIs. All four are null.** The narrow H dispersion on US
+equities (large and small caps), the absence of FFD edge in a GBM, and the
+collapse of the GBM Sharpe after embargo all point the same direction:
+**retail fractal alpha on US stocks is not meaningfully present.**
+
+The single positive finding is S4 (intraday volatility concentration at
+open) which is classical microstructure, not new, and is execution alpha
+rather than directional. It can still be valuable if you actively trade.
+
+If I were choosing what to do next, I would:
+1. **Stop burning time on directional fractal strategies for US equities.**
+2. Build out S4 into a proper execution timing module on a real trading
+   account.
+3. Investigate whether any **ETF-level** strategies (country, sector,
+   style) show wider H dispersion - we haven't tested that yet.
+4. Apply the now-validated backtest harness (costs, bootstrap CIs, embargo)
+   to any other factor ideas the user actually wants to test - the
+   infrastructure work is the lasting value of this project.
