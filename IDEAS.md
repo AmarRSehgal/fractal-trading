@@ -1,520 +1,353 @@
-# IDEAS: fractal and Fourier methods for trading
+# IDEAS: fractal and Fourier methods for stock trading
 
-Concrete analysis and strategy ideas with formulas, pseudocode, data needs, and
-evaluation plans. Each idea is ranked by **payoff per effort** based on
-literature and likelihood of surviving out-of-sample.
+Concrete analysis and strategy ideas for **US equities**, grounded in the
+papers covered in [`RESEARCH_NOTES.md`](RESEARCH_NOTES.md). Each idea is
+ranked by payoff-per-effort.
 
-See [`RESEARCH_NOTES.md`](RESEARCH_NOTES.md) for the source papers each idea
-draws from and what I could / couldn't fetch.
+This file now also contains **first-pass empirical findings** from the
+backtests in `scripts/` (see [`RESULTS.md`](RESULTS.md) for the raw numbers).
 
 ---
 
-## 0. Ground rules (anti-patterns to avoid)
+## The constraint you must internalize first
 
-Before anything else, a small list of things that *look* like fractal / Fourier
-trading ideas but are not:
+Lo (1991) — his *Econometrica* paper on long-term memory in stock market
+prices — is specifically about US equities. He showed that the aggregate US
+stock market has no significant long-range dependence once you correct for
+short-range autocorrelation with a Newey-West style long-run variance. This
+finding has held up across 30+ years of follow-up work.
 
-1. **Elliott Wave** - narrative pattern-matching, not math. Not fractal in any
-   falsifiable sense.
-2. **Bill Williams "fractal" indicator** - a 5-bar pivot high/low. Branding, not
-   fractal analysis.
-3. **FFT on raw price to find dominant cycles** - price is non-stationary and
-   non-periodic; peaks you find are almost always windowing artifacts or
-   spurious. Every serious critique (Lo 1991 style) has buried this.
+**Practical consequence:** any strategy whose pitch is "run DFA on SPY and
+switch between trend and mean-reversion" is near-certain to fail. Our own
+reproduction of Lo's finding is embedded in the empirical note for idea #1
+below — the H-distribution across S&P 100 is tight around ~0.47 with almost
+no stocks rejecting the null.
+
+The edge, if it exists, has to come from:
+- **cross-sectional dispersion** (individual stocks differing from the index)
+- **stationary derived features** (vol, volume, spreads), not price memory
+- **execution timing** (intraday seasonality in microstructure)
+
+---
+
+## Ground rules (anti-patterns)
+
+1. **Elliott Wave** - narrative pattern matching, not math.
+2. **Bill Williams "fractal" indicator** - a 5-bar pivot, not fractal analysis.
+3. **FFT on raw price to find "cycles"** - price is non-stationary and
+   non-periodic; peaks are windowing artifacts.
 4. **Symmetric low-pass filtering of price for signals** - pure lookahead bias.
-   The filter uses future values. If you see backtested charts with smoothed
-   price signals, assume lookahead until proven otherwise.
-5. **Cherry-picking window sizes for Hurst until you get H > 0.5** - Hurst
-   estimates are noisy, especially on < 500 samples. Always report a confidence
-   interval from a surrogate (shuffled) distribution.
+5. **Hurst on SPY/QQQ as a trend/MR switch** - Lo proved this has no signal.
+6. **Cherry-picking lookback windows until H > 0.5** - always report a
+   bootstrap or surrogate confidence interval.
+7. **Backtests on current-constituents universes** - survivorship bias.
+   yfinance-sourced data has this problem; so does every retail stock data
+   source. **All backtests in this repo are biased upward** until we move to
+   a delisting-aware source.
 
-The null hypothesis in every experiment below is `H = 0.5` (random walk) or
-"no seasonal peak above noise." You should *hope* to reject it, not assume it.
+Null hypothesis in every experiment: `H = 0.5`, or "no factor edge." You
+should *hope* to reject it, not assume it.
 
 ---
 
 ## Part A - Analysis ideas (estimators and diagnostics)
 
-### A1. Rolling Hurst exponent via DFA (flagship)
+### A1. Rolling Hurst exponent via DFA on individual stocks
 
-**Source:** Bariviera (2017); Di Matteo et al. (2005); Lo (1991, critique).
+**Source:** Di Matteo et al. (2005) scaling of developed vs emerging markets;
+Bariviera (2017) methodology; Lo (1991) critique.
 
-**Idea.** DFA (detrended fluctuation analysis) estimates the Hurst exponent on
-non-stationary signals better than classical R/S. Apply on a rolling window of
-log returns to classify market regimes:
-- `H > 0.55` - persistent / trending
-- `H ~ 0.5` - efficient / random walk
-- `H < 0.45` - anti-persistent / mean-reverting
+**Idea.** DFA estimates the Hurst exponent on non-stationary signals better
+than classical R/S. Compute per-stock on rolling returns as a diagnostic
+and factor.
 
-**Algorithm (DFA).** Given log returns `r_t`, `t = 1..N`:
+**Our DFA is validated** (see `tests/test_hurst.py` and
+`scripts/01_validate_estimators.py`):
+- Recovers H = 0.30, 0.50, 0.60, 0.70, 0.80 on fBm with std ~0.025.
 
-1. Integrate: `y_t = sum_{i=1..t} (r_i - mean(r))`.
-2. For each window size `s` in a logarithmic grid:
-   a. Split `y` into non-overlapping windows of length `s`.
-   b. In each window, fit a polynomial trend (order 1 or 2) and compute the
-      RMS of the residuals.
-   c. Average across windows to get `F(s)`.
-3. Plot `log F(s)` vs `log s`. Slope is the Hurst exponent `H`.
+**Empirical note on US equities.** When run on S&P 100 daily log returns
+(2005-2026, full sample), DFA gives:
+- Mean H = 0.465, std = 0.034
+- 5-95 percentile: [0.415, 0.517]
+- Only 5/100 stocks reject Lo's no-long-memory null at 95% (vs ~5 expected
+  by chance alone)
 
-**Pseudocode:**
+That is essentially a reproduction of Lo's 1991 finding. The cross-sectional
+dispersion of H is tiny. Treat H as a feature with very low information
+content on large-cap US stocks.
 
-```python
-def dfa(returns, scales, order=1):
-    y = np.cumsum(returns - returns.mean())
-    F = []
-    for s in scales:
-        n_windows = len(y) // s
-        y_trim = y[:n_windows * s].reshape(n_windows, s)
-        t = np.arange(s)
-        rms_per_window = []
-        for w in y_trim:
-            p = np.polyfit(t, w, order)
-            resid = w - np.polyval(p, t)
-            rms_per_window.append(np.sqrt(np.mean(resid ** 2)))
-        F.append(np.mean(rms_per_window))
-    slope, _ = np.polyfit(np.log(scales), np.log(F), 1)
-    return slope  # Hurst exponent estimate
-```
-
-**Data.** Daily or hourly log returns, 500-2000 samples per rolling window.
-Use `nolds.dfa` as a reference implementation to sanity-check your own.
-
-**Evaluation.**
-- Run on shuffled returns (destroys serial correlation). Should yield
-  `H ~ 0.5`. If not, your estimator is biased.
-- Bariviera (2017) found BTC Hurst in 2011-13 was ~0.55-0.60 but drifted toward
-  0.50 by 2014-17 as the market matured. Try to reproduce.
-- Lo (1991) showed classical R/S inflates H when short-range autocorrelation is
-  present. Compute both DFA and **modified R/S** and compare.
-
-**Payoff estimate.** High, if used as a regime filter (see strategy S1). Low, if
-used as a direct signal - H drifts slowly, won't generate many trades.
+**Code:** `fractal_trading.hurst.dfa`. Implementation details:
+1. Integrate returns: `y_t = sum_{i<=t} (r_i - mean)`.
+2. For each window size `s`, split `y` into non-overlapping windows, fit
+   polynomial (default order 1), compute per-window RMS of residuals, then
+   RMS across windows -> `F(s)`.
+3. Regress `log F(s)` on `log s`. Slope = Hurst.
 
 ---
 
-### A2. Modified R/S statistic (Lo 1991)
+### A2. Modified R/S (Lo 1991)
 
-**Source:** Lo (1991), *Long-term memory in stock market prices*.
+**Source:** Lo (1991).
 
-**Idea.** Classical R/S (rescaled range) famously finds long memory in equities,
-but Lo showed most of these findings disappear once you correct the denominator
-for short-range autocorrelation. Implement Lo's modified R/S as the skeptical
-check on A1.
+**Idea.** Classical R/S inflates H for AR(1)-like series. Modified R/S uses
+a Newey-West long-run variance denominator with Andrews' data-dependent
+bandwidth `q`.
 
-**Formula.** For a series of length `n` with cumulative sum `Y_k`:
+**Our implementation is validated:**
+- Size under H0: 2/50 rejections at 5% (correct size).
+- AR(1) phi=0.5: naive implied H = 0.591 (false positive); modified = 0.525
+  (correctly reined in). This is Lo's headline finding reproduced.
 
-```
-Q_n = (1 / sigma_n(q)) * [ max_k (Y_k - (k/n) Y_n) - min_k (Y_k - (k/n) Y_n) ]
-```
+**Use.** Run alongside DFA. If DFA says H > 0.55 but modified R/S does not
+reject the null, the apparent "long memory" is short-range autocorrelation.
 
-where `sigma_n(q)` is the **Newey-West** style long-run variance estimator:
-
-```
-sigma_n(q)^2 = gamma_0 + 2 * sum_{j=1..q} w_j(q) * gamma_j
-gamma_j       = sample autocovariance at lag j
-w_j(q)        = 1 - j / (q + 1)    (Bartlett weights)
-```
-
-Choose `q` via Andrews' data-dependent rule or set `q = floor(4 * (n/100)^(2/9))`.
-
-**Evaluation.** If classical R/S gives H > 0.5 but Lo's modified statistic is
-inside its null band, the "long memory" is actually short-range autocorrelation.
-This is the single most important sanity check in fractal market analysis.
+**Code:** `fractal_trading.hurst.modified_rs`.
 
 ---
 
-### A3. Fractionally differentiated features (López de Prado, AFML ch. 5)
+### A3. Fractionally differenced features (López de Prado AFML ch. 5)
 
-**Source:** López de Prado (2018), AFML ch. 5; Hosking (1981).
+**Source:** López de Prado (2018).
 
-**Idea.** Integer-differenced returns are stationary but erase memory. Raw
-prices have memory but are non-stationary. **Fractional differencing** with
-`d` in `(0, 1)` lets you keep memory *and* achieve stationarity (ADF test
-passes). Use as a feature for any ML model on price series.
+**Idea.** Integer differencing destroys memory. Fractional differencing with
+`d` in `(0, 1)` makes a series stationary while retaining long-term
+correlation with the original. Use as an ML feature.
 
-**Formula.** The fractional difference operator using binomial expansion:
+**Our implementation is validated** (`tests/test_fracdiff.py`):
+- `d = 0` gives identity; `d = 1` gives first-difference.
+- FFD of a random walk is stationary (ADF rejects non-stationarity at some
+  `d < 1`).
+- FFD correlates highly with original series; integer-differenced does not.
 
-```
-(1 - L)^d x_t = sum_{k=0..inf} (-1)^k C(d, k) x_{t-k}
+**Empirical note.** As a **standalone cross-sectional factor** (z-score of
+FFD(log price) with d=0.4 over 252-day rolling window), frac-diff did
+**worse** than 12-1 momentum on S&P 100 2005-2026:
+- Momentum 12-1: Sharpe 0.17, turnover 38%/month
+- FFD z-score:   Sharpe 0.01, turnover 74%/month
+- Combined:      Sharpe -0.02
 
-C(d, k) = d * (d - 1) * ... * (d - k + 1) / k!
-```
+FFD is noisier than a log-return momentum for a single-factor sort. My prior
+was "similar edge, lower turnover"; actual result was "no edge, higher
+turnover." This does NOT invalidate López de Prado's original proposal -
+FFD was proposed as an ML feature for models that can use levels, not as a
+standalone cross-sectional score. That test (combining FFD with a tree-based
+model and walk-forward CV) is still TBD.
 
-In practice, use the **fixed-width window (FFD)** variant: truncate weights when
-`|w_k| < tau` (e.g. `tau = 1e-5`). This avoids the expanding-window lookahead
-problem and gives stationary drift-free series.
-
-**Pseudocode:**
-
-```python
-def frac_diff_weights(d, size):
-    w = [1.0]
-    for k in range(1, size):
-        w.append(-w[-1] * (d - k + 1) / k)
-    return np.array(w)
-
-def frac_diff_ffd(series, d, tau=1e-5):
-    w = frac_diff_weights(d, len(series))
-    # truncate where weights fall below tau
-    cutoff = np.argmax(np.abs(w) < tau) if (np.abs(w) < tau).any() else len(w)
-    w = w[:cutoff]
-    out = np.convolve(series, w, mode='valid')
-    return out
-```
-
-**How to pick `d`.** Sweep `d` from 0 to 1 in 0.05 steps, compute ADF statistic
-at each `d`, and pick the smallest `d` whose ADF p-value < 0.05. Often this is
-`d ~ 0.3-0.5` for prices - you get stationarity without erasing all the drift.
-
-**Evaluation.**
-- Compare predictive power of `frac_diff(price, d)` vs `log_return` vs raw
-  price in a simple downstream regression (predicting next-day return from
-  lagged feature).
-- Check cross-correlation: fractionally-differenced series should correlate
-  highly (`> 0.8`) with the original, unlike log returns which correlate near 0.
-
-**Payoff estimate.** High. This is the one idea in the literature that is
-clearly adopted by professional quant shops as a feature engineering tool.
+**Code:** `fractal_trading.fracdiff.frac_diff_ffd` and `.find_min_d`.
 
 ---
 
-### A4. Multifractal DFA (MF-DFA) for volatility regime
+### A4. Spectral analysis of stationary derived features
 
-**Source:** Bariviera et al. on 84 cryptocurrencies
-(arXiv:2003.09720); Kantelhardt et al. (2002) original method.
+**Source:** Classical signal processing; Welch's method.
 
-**Idea.** A single Hurst exponent assumes scaling is uniform. Real markets show
-different scaling for small vs large fluctuations - this is multifractality.
-The MF-DFA spectrum `h(q)` gives `H` at different moment orders `q`; the width
-`delta h = h(q_min) - h(q_max)` quantifies multifractality.
-
-Wide `delta h` - heavy-tailed, complex, non-stationary regime.
-Narrow `delta h` - closer to monofractal / fractional Brownian motion.
-
-**Algorithm.** Same as DFA, but step 2c becomes:
-
-```
-F_q(s) = ( mean across windows of F^2(s)^(q/2) )^(1/q)
-```
-
-for a range of `q` values, typically `q in [-5, +5] \ {0}`. The scaling
-exponent `h(q)` is the slope of `log F_q(s) vs log s` for each `q`.
-
-**Use.**
-- Flag regimes where `delta h > threshold` as "complex" and avoid strategies
-  that assume Gaussian noise.
-- Compare pairs: if pair A has `delta h = 0.2` and pair B has `delta h = 0.5`,
-  B is a worse candidate for simple moving-average strategies.
-
-**Important caveat from the 2020 paper:** shuffling a time series *reduces* but
-does not *eliminate* multifractality. That means fat tails alone produce
-apparent multifractality - it is not pure evidence of long-range dependence.
-Always compare `delta h(original)` vs `delta h(shuffled)`.
-
-**Evaluation.** Reproduce the Bariviera finding that cryptocurrencies show
-*heterogeneous* multifractal profiles - some are monofractal fractional
-Gaussian noise, others genuinely multifractal. Pick 10 liquid crypto pairs and
-plot their `h(q)` spectra side by side.
-
----
-
-### A5. Spectral analysis of *stationary* features
-
-**Source:** Classical signal processing; any textbook on Welch's method.
-
-**Idea.** Do NOT run FFT on price. DO run FFT on stationary derived features:
-- Absolute returns `|r_t|` (volatility proxy)
-- Trading volume
+**Idea.** Run FFT on **stationary** features, never raw price:
+- `|log returns|` (volatility proxy)
+- Volume
 - Bid-ask spread
-- Funding rate on perpetual futures (often pseudo-periodic with the funding
-  interval)
 
-Welch's method (windowed periodogram averaging) gives a clean PSD for these.
-Real peaks you should find:
-- **24-hour peak** in volume/volatility - the intraday U-shape
-- **168-hour peak** in volume - day-of-week effect (weaker in crypto, strong
-  in equities/FX)
-- **Funding cycle peak** (8-hour on most perps) - mostly from the funding
-  itself leaking into price
+Real peaks you should find in US equities:
+- **Daily peak** in volume/volatility - the intraday U-shape (open and
+  close auctions concentrate liquidity).
+- **Weekly** (5 trading days) peak in volume.
+- **Quarterly earnings** concentration.
 
-**Pseudocode:**
+**Usage.** Execution alpha (not directional). Time discretionary orders to
+high-liquidity windows.
 
-```python
-from scipy.signal import welch
-freqs, psd = welch(abs_returns, fs=sampling_per_day, nperseg=2048)
-# plot log(psd) vs freqs; look for peaks above the 1/f baseline
-```
-
-**Payoff estimate.** Medium. The findings themselves are known, but quantifying
-them on your data gives you honest calibration for execution (e.g. concentrate
-passive posting during high-volume windows).
+**Data constraint with yfinance.** yfinance 1-minute bars are limited to
+the last 7 days. For a meaningful intraday study you need a paid source
+(Polygon, Alpha Vantage Premium). A scoped-down alternative: 1-hour bars
+for 2 years, on a small watchlist. Worth building but lower priority than
+the directional strategies.
 
 ---
 
-### A6. Wavelet decomposition for multi-scale features
+### A5. MF-DFA (multifractal) for volatility regime
 
-**Source:** Gençay, Selçuk, Whitcher (2001); Ramsey (1999).
+**Source:** Kantelhardt et al. (2002) MF-DFA; Bariviera 2020 heterogeneity
+applied to 84 crypto - the method transfers to stocks.
 
-**Idea.** Wavelets are localized in time *and* frequency (FFT is only frequency).
-Use **Maximum Overlap Discrete Wavelet Transform (MODWT)** on returns to
-decompose into scale-specific detail coefficients:
-- `d1` - 2-4 bar fluctuations (microstructure noise)
-- `d2` - 4-8 bar (short-term)
-- ...
-- `dK` - longest scale retained
+**Idea.** A single H assumes uniform scaling. MF-DFA computes `h(q)` over a
+range of moment orders `q`, and the width `delta h = h(q_min) - h(q_max)`
+quantifies multifractality. Wider delta h = more complex dynamics.
 
-**Uses.**
-- Feature engineering: wavelet coefficients at each scale as inputs to a model.
-- Denoising: zero out `d1`/`d2` detail coefficients if you believe they're
-  microstructure noise, reconstruct a cleaner series. **Only use causal
-  wavelets** (e.g. Haar with padding, or boundary-corrected MODWT) to avoid
-  lookahead.
-- Cross-scale coherence between two assets (wavelet coherence) - tells you on
-  which timescales assets co-move.
+**Use.** Compare SPX index vs sector ETFs vs individual stocks. Sectors with
+more multifractal volatility may need different options strategies
+(straddles etc.) than plain-vanilla monofractal sectors.
 
-**Library.** `pywavelets` (`pywt.swt` for stationary wavelet transform / MODWT).
-
-**Payoff estimate.** Medium-low. More compelling as a research tool than a
-production signal. Real quant shops rarely deploy wavelet-filtered signals
-directly; they use wavelet coefficients as ML features.
+**Status:** Not yet implemented. Tier-2 priority given the weak directional
+results.
 
 ---
 
-## Part B - Fourier option pricing (tangential but rigorous)
+## Part B - Trading strategy ideas (stock-focused)
 
-### B1. Carr-Madan FFT pricer for European options
+### S1. Cross-sectional Hurst sort
 
-**Source:** Carr & Madan (1999) (cited from prior knowledge; PDF fetch returned
-binary-only).
+**Paper basis:** Di Matteo 2005 (cross-market dispersion); Bariviera 2020
+(heterogeneity).
 
-**Idea.** For any model whose characteristic function of log spot `X_T =
-log(S_T)` is known in closed form (Black-Scholes, Heston, Variance Gamma,
-CGMY), you can price a whole strip of European calls in O(N log N) via a
-single FFT.
+**Hypothesis.** Within a stock universe, high-H names trend and low-H names
+mean-revert. Long top-quintile H, short bottom-quintile, monthly rebalance,
+equal-weighted.
 
-**Setup.** Let `phi_T(u) = E[exp(i u X_T)]` be the characteristic function of
-log-spot. The damped call `c_T(k) = exp(alpha k) C_T(k)`, where `k = log(K)`,
-`alpha > 0` ensures L2 integrability. Its Fourier transform is:
+**Empirical result (S&P 100, 2005-2026, lookback 500d, no costs, survivorship-biased):**
 
-```
-psi_T(v) = exp(-r T) * phi_T(v - (alpha + 1) i)
-          / (alpha^2 + alpha - v^2 + i (2 alpha + 1) v)
-```
+| Stat            | Value   |
+|-----------------|---------|
+| Annual return   | 4.9%    |
+| Annual vol      | 10.5%   |
+| Sharpe          | 0.47    |
+| Max drawdown    | -28.1%  |
+| Hit rate        | 51.4%   |
+| Turnover / reb  | 42.3%   |
+| N monthly rebals| 212     |
 
-Then:
+**Honest assessment.** Sharpe 0.47 before costs, on a survivorship-biased
+universe, is a **null or very weak positive result**. With 42% monthly
+turnover and realistic costs (say 10 bps round trip), cost drag is
+~0.42 * 0.002 * 12 = 1.0% annual - knocking Sharpe to ~0.35. Survivorship
+correction typically costs another 1-2% of annual return. Net expected
+Sharpe after both: ~0.1-0.2.
 
-```
-C_T(k) = (exp(-alpha k) / pi) * integral_{0..inf} Re[ exp(-i v k) psi_T(v) ] dv
-```
+**This is probably not a trading edge on US large caps.** Might work better
+on:
+- Mid/small caps (Russell 2000) where dispersion in H should be wider.
+- Longer lookbacks (3-year) to reduce noise.
+- Longer holding periods (quarterly) to cut turnover.
+- As a **gating filter** rather than sort (only trade names with H > 0.55).
 
-Discretize `v_j = eta * j` and sample `k_u = -b + lambda * u` with
-`lambda * eta = 2 pi / N`. The integral becomes a discrete FFT.
-
-**Choice of `alpha`.** Carr-Madan recommend `alpha ~ 1.5`. Deep OTM options
-need larger `alpha`; too large introduces numerical error. Sensible default:
-`alpha = 1.5`, `eta = 0.25`, `N = 4096`.
-
-**Pseudocode:**
-
-```python
-def carr_madan(phi_T, r, T, S0, alpha=1.5, N=4096, eta=0.25):
-    lam = 2 * np.pi / (N * eta)
-    b = N * lam / 2
-    v = np.arange(N) * eta
-    u = v - (alpha + 1) * 1j
-    psi = np.exp(-r * T) * phi_T(u) / (alpha ** 2 + alpha - v ** 2
-                                        + 1j * (2 * alpha + 1) * v)
-    # Simpson weights for accuracy
-    simpson = (3 + (-1) ** np.arange(N) - np.concatenate(([1], np.zeros(N-1)))) / 3
-    x = np.exp(1j * b * v) * psi * eta * simpson
-    y = np.fft.fft(x)
-    k = -b + lam * np.arange(N)   # log strikes
-    C = np.exp(-alpha * k) / np.pi * np.real(y)
-    K = np.exp(k)                  # strikes
-    return K, C
-```
-
-**Characteristic functions to implement.**
-- Black-Scholes: `phi(u) = exp(i u (log S0 + (r - sigma^2/2) T) - sigma^2 u^2 T / 2)`
-- Heston: closed form with complex log - use principal branch carefully.
-- Variance Gamma: `phi(u) = exp(i u omega T) * (1 - i theta nu u + sigma^2 nu u^2 / 2)^(-T/nu)`
-
-**Why bother if not trading options?** Two reasons:
-1. Educational - forces you to understand characteristic functions and Fourier
-   inversion rigorously.
-2. If you ever want to trade Deribit BTC/ETH options, you can price Heston to
-   market IV surfaces and flag mispricings.
-
-**Evaluation.** Verify against Black-Scholes closed form to machine precision
-for the BS characteristic function. Then calibrate Heston to Deribit IV
-snapshots and see residuals.
+**Code:** `scripts/03_hurst_sort_backtest.py`.
 
 ---
 
-## Part C - Trading strategy ideas
+### S2. Fractional-diff feature in an ML model
 
-Each strategy proposes a concrete entry/exit rule, sizing, and a backtest plan.
-None are production-ready; all need out-of-sample validation.
+**Paper basis:** López de Prado (2018) AFML ch. 5.
 
-### S1. Hurst regime gate on existing strategies
+**Hypothesis (revised).** As a standalone cross-sectional z-score it fails
+(see A3). As an **input feature to a nonlinear model** - alongside standard
+factors - it may add lift by providing level information that log-returns
+erase.
 
-**Source:** Synthesis of A1 + A4.
+**Test to run (not yet built):**
+- Build a panel dataset: per-stock monthly features including frac-diff at
+  multiple `d` values, log-returns at multiple horizons, vol, size.
+- Fit a gradient-boosted tree predicting next-month return.
+- Compare OOS hit-rate, Sharpe of factor portfolio built from predictions,
+  with frac-diff included vs excluded.
+- Walk-forward CV, no k-fold.
 
-**Hypothesis.** Trend-following strategies work when `H > 0.55`, mean-reversion
-strategies work when `H < 0.45`, neither works near `H = 0.5`.
-
-**Setup.**
-- Universe: 5-10 liquid crypto pairs or equity ETFs.
-- Rolling window: 500 bars (daily) or 1000 bars (hourly).
-- Signal: compute DFA Hurst `H_t` at each step.
-
-**Rule.**
-- If `H_t > 0.55`: run a simple trend strategy (e.g., 20/50 SMA crossover).
-- If `H_t < 0.45`: run a simple mean-reversion (e.g., z-score of 20-bar return,
-  short top decile, long bottom decile).
-- Else: flat.
-
-**Backtest plan.**
-1. Split data 70/30 in-sample / out-of-sample by date.
-2. Tune thresholds (0.55 / 0.45) only on in-sample.
-3. Report OOS Sharpe, max drawdown, hit rate for each regime separately.
-4. **Key sanity check**: do the *same rule* with randomized Hurst labels.
-   If OOS Sharpe is similar, your Hurst gate is doing nothing.
-
-**Risk.** Hurst is slow-moving. Regime transitions are rare, so your effective
-sample size for validating the gate is small. Expect very wide confidence
-intervals.
+**Status:** Not yet built. Priority 2.
 
 ---
 
-### S2. Mean-reverting pair selection via spread Hurst
+### S3. Lo-filtered trend universe
 
-**Source:** Classical pair trading + A1.
+**Paper basis:** Lo (1991) - use as a filter rather than a dismissal.
 
-**Idea.** Pair trading assumes the spread is mean-reverting. Test this directly
-with Hurst on the spread, not just cointegration tests.
+**Hypothesis.** Among 3000+ US stocks, the ~5-15% that actually pass Lo's
+modified R/S test at 95% have genuine short-to-medium memory. Simple trend
+rules on that subset should outperform the broader universe.
 
-**Algorithm.**
-1. For all pairs in a universe, compute hedge ratio beta via rolling OLS.
-2. Form spread `s_t = y_t - beta * x_t`.
-3. Compute `H(s)` via DFA.
-4. Trade only pairs with `H < 0.40` (strongly mean-reverting) AND Johansen
-   cointegration p-value < 0.05.
-5. Entry: `|z-score| > 2`. Exit: `|z-score| < 0.5` or time stop 20 bars.
+**Caveat reinforced by our S&P 100 diagnostic.** Only 5/100 S&P 100 names
+reject the null. Extending to Russell 3000 may give us 150-450 passers but
+they are likely small-caps where trading costs are much higher.
 
-**Why this beats plain cointegration.** Cointegration tells you a linear
-combination is stationary; Hurst tells you *how fast* it reverts. A pair with
-H = 0.49 technically cointegrated but reverts so slowly you bleed on fees.
+**Test to run (not yet built):**
+- Monthly: compute modified R/S on 2-year return history for Russell 3000
+  (yfinance workable if slow).
+- Filter to passers at 95%.
+- 200-day SMA trend rule on passers.
+- Compare to same rule on all 3000.
 
-**Evaluation.** Backtest on 2018-2023, validate on 2024-2026. Track per-pair
-Hurst evolution over time - pairs that drift toward H=0.5 are dying and should
-be dropped.
+**Status:** Not yet built. Priority 2.
 
 ---
 
-### S3. Fractional-diff features into a baseline ML model
+### S4. Intraday seasonality-aware execution
 
-**Source:** A3 + standard ML.
+**Paper basis:** A4.
 
-**Idea.** Replace log returns with fractionally-differenced price as the input
-feature to a simple model (logistic regression or gradient-boosted tree)
-predicting next-bar direction.
+**Hypothesis.** Liquidity concentrates at specific intraday times in US
+equities (open auction, 10:00-10:30, 15:30-16:00 close auction). A learned
+intraday volume/spread profile per stock should reduce execution cost 5-20
+bps per trade.
 
-**Feature set (all at the bar you're predicting from):**
-- `frac_diff(log_price, d=0.4)` - current level
-- Lagged versions at 1, 2, 5, 20 bars
-- `frac_diff(log_volume, d=0.3)` - optional
+**Data constraint.** yfinance 1-minute = 7 days only. Workable scope:
+hourly bars for 2 years per stock.
 
-**Target.** Sign of next-bar return (binary) or next-bar return itself
-(regression).
-
-**Model.** L2-regularized logistic regression. **Do not use deep learning yet**
-- the whole point is to isolate whether fractional diff as a feature gives
-lift vs. plain log returns.
-
-**Evaluation.**
-- Run two identical pipelines: one with log-return features, one with
-  frac-diff features.
-- Walk-forward CV (not k-fold - you'll leak).
-- Compare OOS accuracy / AUC / strategy Sharpe.
-
-**Expected.** Small but consistent lift (a few bps of edge per trade) on
-trending assets. If you see huge lift, you're leaking data - re-check that
-frac-diff uses only past weights (FFD, not expanding window).
+**Status:** Not yet built. Priority 3 (execution alpha, not directional).
 
 ---
 
-### S4. Intraday seasonality-aware passive execution
+### S5. Sector-level Hurst rotation
 
-**Source:** A5.
+**Paper basis:** Di Matteo 2005 (scaling differs across markets).
 
-**Idea.** Volume and spread have clear intraday seasonality (FFT peaks at 24h
-and its harmonics). Use the learned PSD to allocate passive liquidity posting
-to windows with best fill probability and narrowest spreads.
+**Hypothesis.** GICS sectors differ in persistence: defensives (utilities,
+staples) may be more persistent; cyclicals less so. Overweight momentum in
+high-H sectors.
 
-**Simple version:**
-1. Compute average volume and average spread per minute-of-day over 30 days.
-2. Rank minutes by volume / spread.
-3. Post passive orders preferentially in top-quartile minutes.
+**Universe:** 11 SPDR sector ETFs (XLK, XLF, XLE, XLV, etc.).
 
-**Fancier version:** Fit a seasonal component (Fourier series with 24h and 12h
-terms) to log-volume and use residuals as an "abnormal volume" feature.
-
-**Payoff.** Execution alpha, not directional alpha. Won't show up in Sharpe
-directly; will show up in reduced implementation shortfall.
+**Status:** Not yet built. Priority 3. Small universe so signal-to-noise
+of factor will be limited.
 
 ---
 
-### S5. Funding-rate seasonality trade (crypto perps)
+### S6. Carr-Madan SPX/VIX options pricer
 
-**Source:** A5 applied to perps.
+**Paper basis:** Carr & Madan (1999).
 
-**Idea.** Perpetual funding is paid every 8h on most exchanges. The hours
-before funding tick often show predictable pressure as the market positions
-for or against the funding payment. Compute the Fourier spectrum of past
-pre-funding returns to confirm a peak at the 8h cycle, then trade accordingly.
+**Hypothesis.** Not a trading edge per se; a calibration tool. Calibrate
+Heston to SPX IV surface daily via Carr-Madan FFT. Options that are 2 sigma
+away from the model fit are candidates for vol-arb investigation.
 
-**Test first, then trade.** If the 8h peak in pre-funding return direction is
-not statistically above the noise floor on a held-out period, drop the idea.
-Known effect on BTC/ETH perps in 2021 that has decayed significantly - worth
-re-measuring on 2024+ data.
+**Status:** Not yet built. Priority 3 (educational; SPX option markets are
+very efficient, retail edge is near zero here).
 
 ---
 
-## Part D - Evaluation discipline (applies to all)
+## Part C - Evaluation discipline
 
-A set of checks every experiment in this repo must pass before claiming an
-edge:
+Every strategy must pass:
 
-1. **Surrogate test.** Shuffle returns (destroys serial structure). Any Hurst
-   / spectral / fractal statistic should match its theoretical null on the
-   surrogate. If not, your estimator is biased.
-2. **Walk-forward, not random CV.** Never use k-fold on time series.
-3. **Transaction cost flag.** Always run strategies with a realistic per-trade
-   cost (10 bps for crypto retail, 2-5 bps for ETFs). Many "edges" evaporate.
-4. **Hurst confidence interval.** Report not just `H` but its bootstrap 95% CI.
-   On 500 samples, CI width is often ~0.1 - a point estimate of 0.55 with CI
-   [0.49, 0.61] is *not* evidence of long memory.
-5. **Pre-register.** Before running a backtest, write down what result would
-   make you believe the edge is real. This prevents "finding" a narrative for
-   whatever you happen to see.
+1. **Surrogate test.** Shuffle returns; the factor's Sharpe on the surrogate
+   must be indistinguishable from zero.
+2. **Walk-forward, not random k-fold.** Never k-fold time series.
+3. **Transaction costs.** 10 bps round-trip for retail liquid stocks at
+   minimum. Consider borrow fees for shorts (easy-to-borrow: ~0.5-2% annual;
+   hard-to-borrow: much worse).
+4. **Survivorship correction.** Acknowledge the bias; add a haircut (1-2%
+   annual return) until you can source delisting-aware data.
+5. **Bootstrap confidence interval** on Sharpe and H. On 5000 samples,
+   Sharpe CI half-width is ~0.2 - a reported Sharpe of 0.4 easily covers
+   zero.
+6. **Pre-register success criteria.** Write down, before running: "if
+   Sharpe > 0.5 and t-stat on alpha > 2, the idea is worth scaling."
 
 ---
 
-## Roadmap
+## Roadmap (revised after first empirical pass)
 
-Ordered by priority. Start top-down, don't skip.
+Ordered by what to do next:
 
-- [ ] Implement `dfa()` and `modified_rs()` in `src/fractal_trading/hurst.py`.
-- [ ] Validate both on synthetic fractional Brownian motion (known H).
-- [ ] Implement `frac_diff_ffd()` and ADF-based `d` picker in `fracdiff.py`.
-- [ ] Notebook: reproduce Bariviera-style rolling Hurst on BTC 2013-2026 daily.
-- [ ] Notebook: MF-DFA spectrum on 10 crypto pairs, ranked.
-- [ ] Notebook: Welch PSD on volume and |returns| for BTC-USDT, ETH-USDT.
-- [ ] Backtest S1 (Hurst regime gate) on a small universe.
-- [ ] Backtest S2 (mean-reverting pair via spread Hurst).
-- [ ] Carr-Madan pricer with Black-Scholes, Heston, VG characteristic functions.
-   (Educational; not in main trading path.)
+- [x] DFA + modified R/S estimators, validated on synthetic fBm and AR(1).
+- [x] FFD + d-picker, validated on random walk.
+- [x] yfinance data loader with parquet cache.
+- [x] Cross-sectional sort backtest harness.
+- [x] Hurst distribution on S&P 100 (diagnostic).
+- [x] Hurst sort backtest on S&P 100 (S1).
+- [x] Frac-diff vs momentum head-to-head on S&P 100 (preliminary A3 test).
+- [ ] Extend S1 to Russell 2000 / 3000 (wider H dispersion expected).
+- [ ] Add transaction cost model and survivorship haircut to backtest output.
+- [ ] Bootstrap CI on Sharpe for all reported strategy results.
+- [ ] Build S2 proper: frac-diff in gradient boosting with walk-forward CV.
+- [ ] Build S3: Lo-filtered universe.
+- [ ] Intraday hourly-bar seasonality (S4) on watchlist.
+- [ ] MF-DFA on SPX and sector ETFs (A5).
+- [ ] Carr-Madan BS and Heston pricers (B1) — educational only.
 
-Do not build a framework, a config system, or a backtester abstraction until
-you have three concrete experiments running. Resist the urge to over-engineer.
+Updates will be appended to `RESULTS.md` as each idea reports numbers.

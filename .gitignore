@@ -9,7 +9,8 @@ venv/
 data/raw/
 data/processed/
 *.parquet
-*.csv
+# only ignore cached/downloaded csv data; keep results CSVs
+.data_cache/*.csv
 !requirements.txt
 .DS_Store
 .vscode/
