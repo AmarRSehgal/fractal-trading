@@ -354,26 +354,33 @@ Done:
 Nearly pointless given accumulated null findings:
 - [ ] S3 Lo-filtered trend universe.
 
-Potentially salvageable but need new approaches:
-- [ ] **Residualized Hurst** - regress H on asset class + vol,
-  sort on the residual. Might isolate genuine fractal content from
-  asset-class noise. This is the single remaining respectable directional
-  test.
-- [ ] **MF-DFA on VIX vs SPX realized vol** (A5) as a volatility regime
-  indicator, feeding options strategies.
-- [ ] Reality-check S4 intraday result with live broker execution data.
+Still open:
 - [ ] Carr-Madan BS/Heston pricer (B1) - purely educational at this point.
+- [ ] Rebuild with a bias-free data source (CRSP / Sharadar) to see if
+  survivorship was hiding real weak alpha. Unlikely but untested.
 
-## The two lessons to encode going forward
+Closed:
+- [x] **Residualized Hurst.** R^2 of H ~ class + vol = 0.996 across
+  ETFs. The cleaned residual has Sharpe -0.13 net, CI [-0.65, 0.38].
+  Null.
+- [x] **MF-DFA Delta h on VIX as regime gate.** Gate Sharpe 0.70 vs BH
+  SPY 0.59 (+0.11). Bootstrap 95% CI on diff = [-0.30, +0.51]; p(diff>0)
+  = 0.68. Marginally positive, not statistically significant.
+- [x] **Intraday execution backtest.** VWAP-profile reduces variance
+  ~20% vs uniform but mean saving is negligible and not significant.
+  "Avoid open" is WORSE than uniform on mean cost (open vol cuts both
+  ways).
+
+## The three lessons to encode going forward
 
 1. **Embargo every walk-forward CV.** The GBM embargo bug (Sharpe 1.84 ->
-   0.015 after fix) is the single most valuable artifact here. Any future
-   backtest in this repo must audit its embargo before celebrating a
-   Sharpe.
+   0.015 after fix) is the single most valuable methodological artifact
+   from this project.
 2. **Compositional analysis on every sort.** The ETF sort's Sharpe -0.48
-   was the *consequence* of an unintended long-commodities / short-bonds
-   tilt. If we hadn't logged the composition, we might have concluded
-   "Hurst has anti-alpha on ETFs" rather than "Hurst ranks ETFs by asset
-   class." Always ask: *what is the sort actually holding?*
+   was a long-commodities/short-bonds regime bet in fractal clothing.
+   Always log per-leg asset-class mix.
+3. **Residualize before celebrating.** H on ETFs has R^2 = 0.996 vs
+   asset class + vol. Any cross-sectional factor you propose has to be
+   shown to add information on top of trivial confounds.
 
 Updates are appended to [`RESULTS.md`](RESULTS.md).

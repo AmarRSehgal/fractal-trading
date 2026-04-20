@@ -54,38 +54,41 @@ python3 scripts/04_fracdiff_comparison.py
 
 All net-of-cost Sharpes use 10bps per side with 95% bootstrap CI.
 
-| Experiment                             | Sharpe net | 95% CI         | Verdict |
+| Experiment                             | Stat       | 95% CI         | Verdict |
 |----------------------------------------|-----------:|----------------|---------|
-| S1: Hurst sort, S&P 100                | ~0.23 (est)| wide           | Weak    |
-| S1: Hurst sort, S&P 600 (small caps)   | -0.22      | [-0.78, 0.33]  | **Null** |
-| A3: FFD as standalone factor           |  0.01      | wide           | **Null** |
-| S2: FFD + mom + vol in LightGBM (embargoed) | -0.08 | [-0.58, 0.43] | **Null** |
-| **S1: Hurst sort, ETFs (cross-asset)** | **-0.48**  | [-1.06, 0.03]  | **Negative (regime bet)** |
-| Baseline: 12-1 momentum                |  0.14      | [-0.27, 0.64]  | Weak    |
-| S4: Intraday seasonality diagnostic    | N/A        | N/A            | **Real** (execution signal) |
+| S1: Hurst sort, S&P 100                | Sh ~0.23   | wide           | Weak    |
+| S1: Hurst sort, S&P 600 (small caps)   | Sh -0.22   | [-0.78, 0.33]  | Null    |
+| A3: FFD as standalone factor           | Sh  0.01   | wide           | Null    |
+| S2: FFD + mom + vol in LightGBM        | Sh -0.08   | [-0.58, 0.43]  | Null    |
+| S1: Hurst sort, ETFs (cross-asset)     | Sh -0.48   | [-1.06, 0.03]  | Negative (regime bet) |
+| Residualized Hurst sort, ETFs          | Sh -0.13   | [-0.65, 0.38]  | Null    |
+| **MF-DFA Δh VIX regime gate vs BH SPY**| **+0.10 Δ**| [-0.30, +0.51] | **Marginal (ns)** |
+| Intraday execution: VWAP vs uniform    | -0.17 bps  | t = -1.0       | Null    |
+| Baseline: 12-1 momentum                | Sh  0.14   | [-0.27, 0.64]  | Weak    |
 
 Key findings:
 1. **Narrow H dispersion in US equities.** Both S&P 100 and S&P 600 show
-   mean H ~0.47 with std ~0.03. Only ~5% reject Lo's null at 95% (about
-   what chance gives). My hypothesis that small-caps would have wider H
-   was wrong.
-2. **Leakage was the GBM Sharpe, not model skill.** First walk-forward
-   gave Sharpe 1.84 - but training rows within 21 BDays of the test date
-   had targets overlapping the test period. With a 22-day embargo the
-   Sharpe collapsed to 0.015.
-3. **Intraday volatility concentrates at market open** - 2.4x the mean of
-   all intraday hours. Classical microstructure finding but quantified
-   per-stock and reusable.
-4. **Cross-asset ETF Hurst sort is a macro regime bet in disguise.**
-   Wider dispersion yes, but composition analysis reveals the sort is
-   always long commodities+EM and short bonds+developed-ex-US - the
-   wrong side of 2010-2026's macro. Hurst on ETFs proxies asset-class
-   fundamentals, not long memory.
+   mean H ~0.47, std ~0.03. Only ~5% reject Lo's null at 95% (chance).
+2. **Leakage, not skill, drove GBM Sharpe 1.84.** 22-day embargo fix
+   collapsed it to 0.015.
+3. **Intraday volatility concentrates at market open** (2.4x average).
+   Real microstructure finding. But "avoid open" execution strategy
+   is *worse* than uniform on mean cost - high open vol cuts both ways.
+4. **ETF Hurst sort is a long-commodities/short-bonds regime bet in
+   fractal clothing.** Composition analysis revealed it.
+5. **After controlling for asset class and vol, Hurst R^2 = 0.996 -
+   nothing left to predict.** Residualized ETF sort: Sharpe -0.13,
+   CI crosses zero.
+6. **MF-DFA Delta h on VIX is the one signal pointing somewhere.** A
+   regime gate ("flat when Delta h > median") improves buy-and-hold
+   Sharpe from 0.59 to 0.70, but 95% bootstrap CI is [-0.30, +0.51] -
+   not statistically significant.
 
-**Interpretation.** Five directional fractal tests. Four nulls, one
-structural negative. The durable wins are the **infrastructure** (bootstrap
-CIs, TC model, embargoed walk-forward, composition analysis) and two
-methodological lessons: always audit embargo; always audit composition.
+**Interpretation.** Eight directional + execution tests. None reject
+zero at 95%. The durable wins are the **infrastructure** (bootstrap CIs,
+cost model, embargoed walk-forward, composition + residualization
+audits) and three methodological lessons: audit embargo, audit
+composition, residualize before claiming edge.
 
 See `RESULTS.md` for full numbers and `IDEAS.md` for what's still worth doing.
 

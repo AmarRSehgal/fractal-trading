@@ -442,12 +442,205 @@ long memory.
 5. Composition analysis pattern (what is the sort actually holding?) -
    essential for any future factor strategy to avoid "alpha in name only."
 
-If further work happens on this repo, pivot away from directional fractal
-strategies on retail instruments. Three genuinely open questions remain:
+---
 
-- **S4 intraday execution** scaled into a real trading workflow.
-- **Residualized Hurst**: regress H on asset-class + vol, use the
-  residual as the sorting factor. Might isolate genuine fractal content
-  from asset-class noise.
-- **MF-DFA on VIX / realized vol** as a regime indicator for option
-  strategies - still untested.
+## 2026-04-20 (third pass): residualized Hurst + MF-DFA VIX + execution
+
+Three experiments left on the roadmap after the ETF sort. Running all of
+them here for completeness.
+
+### Experiment A: Residualized Hurst sort on ETFs (script 09)
+
+**Hypothesis.** The plain ETF Hurst sort was an asset-class bet in
+disguise (script 08). If we regress H on asset class + vol at each
+rebalance and use the residual as the sort factor, we isolate the
+"genuine" fractal content.
+
+**Diagnostic finding.** At each rebalance date, regress
+`H ~ C(broad_class) + vol`. The mean R^2 over the last 20 rebalances is
+**0.996** - essentially all cross-sectional variation in H across
+retail-accessible ETFs is explained by asset class and volatility. The
+"fractal information" is less than 0.4% of the total variance.
+
+**Backtest (residualized H sort, 63 ETFs, 2008-2026, 182 months):**
+
+| Metric            | Plain H   | Residualized |
+|-------------------|-----------|--------------|
+| Sharpe gross      | -0.42     | -0.05        |
+| Sharpe net 10bps  | -0.48     | -0.13        |
+| 95% CI net Sharpe | [-1.06, 0.03] | [-0.65, 0.38] |
+| Max DD            | -62%      | -23%         |
+| Vol               | 9.8%      | 7.5%         |
+| Turnover/rebal    | 27.5%     | 24.8%        |
+
+**Finding.** Residualization moves Sharpe from -0.48 toward 0 (to -0.13,
+CI straddles zero). The asset-class-adjusted residual has no
+predictive edge - consistent with R^2 = 0.996 telling us there is
+almost nothing to predict. Drawdown also falls sharply because the
+portfolio is no longer a concentrated asset-class tilt.
+
+Residualized longs are now spread: bonds_em, intl_singapore,
+intl_hongkong, em_turkey, bonds_ig_corp, em_brazil. Shorts include
+em_safrica, intl_developed, bonds, commodity_natgas. Still biased but
+much less than plain.
+
+**Conclusion.** After controlling for obvious confounds, Hurst contains
+no meaningful cross-sectional signal on retail ETFs. This closes the
+last directional fractal hypothesis on retail-accessible instruments.
+
+---
+
+### Experiment B: MF-DFA on VIX as regime indicator (script 10)
+
+**Implementation.** MF-DFA with q in [-4, ..., +4]; validated on
+synthetic series (monofractal WN and fBm recover constant h(q);
+skew-t distributed shows mild q-dependence). See `tests/test_mfdfa.py`.
+
+**Full-sample VIX log returns (2005-2026):**
+
+| Metric | Value |
+|--------|-------|
+| h(q=-4)   | 0.416 |
+| h(q=-2)   | 0.391 |
+| h(q= 0.5) | 0.354 |
+| h(q= 2)   | 0.329 |  (classical Hurst - mean-reverting, expected for VIX)
+| h(q= 4)   | 0.292 |
+| Delta h   | 0.124 |
+
+VIX has genuine but mild multifractality: Δh = 0.12 is above the Δh
+of fBm (<0.1) but far below a binomial cascade. Classical H = 0.33
+confirms VIX strongly mean-reverts.
+
+**Rolling Δh (500-day window, 232 rolling points) vs 21-day-forward
+outcomes:**
+
+| Signal     | vs SPY fwd ret | vs VIX fwd ret | vs SPY fwd vol | vs VIX level |
+|------------|----------------|----------------|----------------|--------------|
+| Delta h    | -0.119         | +0.035         | -0.007         | -0.172       |
+| h(q=2)     | +0.093         | -0.050         | +0.113         | +0.334       |
+
+Δh vs SPY forward return at -0.12 is the single interesting correlation
+- wider multifractality modestly predicts negative SPY returns.
+
+**Naive regime gate.** Hold SPY when Δh is below its median; flat
+otherwise.
+
+| Strategy           | Ann ret | Ann vol | Sharpe | Time in mkt |
+|--------------------|---------|---------|--------|-------------|
+| Buy-and-hold SPY   | +10.0%  | 16.8%   | 0.59   | 100%        |
+| Δh regime gate     | +8.1%   | 11.6%   | 0.70   | 50%         |
+
+The gate improves Sharpe by +0.11 - but is this statistically real?
+
+**Bootstrap test** (5000 resamples):
+- Mean Sharpe diff (gate - BH): +0.097
+- 95% CI: [-0.298, +0.506]
+- P(diff > 0): 67.5%
+
+**Not statistically significant.** The gate fails to reject zero. Point
+estimate tilted positive but indistinguishable from noise with this
+sample size.
+
+**Conclusion.** MF-DFA on VIX produces the most promising fractal-derived
+signal seen in this project, but it is not statistically significant at
+95% on 21 years of data. Not trade-ready.
+
+---
+
+### Experiment C: Intraday execution cost backtest (script 11)
+
+**Setup.** 26 liquid US stocks, last 700 days of 1-hour bars. Fit volume
+profile on first half; simulate execution strategies on second half.
+6,110 (day x ticker) observations.
+
+**Strategies:** uniform (equal weight across bars), vwap_profile
+(proportional to fitted hourly volume share), avoid_open (uniform but
+skip first bar - motivated by script 06 finding that open has 2.4x
+avg volatility), front_load, end_load.
+
+**Implementation shortfall vs day VWAP (bps):**
+
+| Strategy       | Mean  | Median | Std   | p10    | p90   |
+|----------------|-------|--------|-------|--------|-------|
+| uniform        | +1.25 | +1.40  | 20.3  | -18.5  | +21.5 |
+| vwap_profile   | +1.09 | +1.07  | 16.1  | -13.7  | +16.5 |
+| avoid_open     | +1.49 | +1.81  | 29.7  | -28.6  | +31.3 |
+| front_load     | -0.17 | -2.14  | 60.1  | -62.6  | +62.3 |
+| end_load       | +1.34 | +2.26  | 62.2  | -65.5  | +67.9 |
+
+**Pairwise tests:**
+
+- vwap_profile vs uniform: mean diff -0.17 bps, t-stat -1.0 (not sig)
+- avoid_open vs uniform: mean diff **+0.24 bps**, t-stat +1.5 (marginally
+  worse than uniform, contrary to hypothesis)
+
+**Key findings.**
+1. **"Avoid open" is wrong on cost, even though open is high-vol.** High
+   volatility at the open cuts both ways; average cost is no better than
+   including it. The intuition from script 06 (2.4x volatility) translates
+   to higher variance of execution cost, NOT lower mean cost.
+2. **VWAP-profile reduces variance by ~20%** (std 16 bps vs uniform 20
+   bps) but mean savings is negligible. Still useful if you want more
+   predictable execution costs.
+3. **Front-load has best mean (-0.17 bps)** but triple the variance of
+   uniform. Unreliable.
+4. **Per-ticker heterogeneity is large.** AMD and AAPL benefit from
+   avoid-open (tech names with noisy opens). Defensive names (XOM, JNJ,
+   WMT) get worse execution by avoiding open.
+
+**Conclusion.** Execution alpha on retail-accessible liquid US equities
+is smaller than I expected. The timing improvements are in the
+0.1-0.3 bps range and noisy. For high-frequency or active day-trading
+this would accumulate; for typical swing/position trading with 1-10
+trades/day, execution timing is second-order to everything else.
+
+---
+
+## FINAL summary - eight tests, all done
+
+| Experiment                                      | Sharpe/stat   | 95% CI           | Verdict |
+|-------------------------------------------------|---------------|------------------|---------|
+| S1 Hurst sort S&P 100                           | ~0.23 net     | wide             | Weak    |
+| S1 Hurst sort S&P 600 (small caps)              | -0.22 net     | [-0.78, 0.33]    | Null    |
+| A3 FFD as standalone factor S&P 100             |  0.01 net     | wide             | Null    |
+| S2 GBM w/ FFD+mom+vol embargoed                 | -0.08 net     | [-0.58, 0.43]    | Null    |
+| S1 Hurst sort ETFs (cross-asset)                | -0.48 net     | [-1.06, 0.03]    | Negative|
+| **Residualized H sort ETFs**                    | **-0.13 net** | [-0.65, 0.38]    | **Null**|
+| **MF-DFA VIX Delta h regime gate**              | +0.10 vs BH   | [-0.30, +0.51]   | Marginal (ns) |
+| **Intraday execution (VWAP vs uniform)**        | -0.17 bps     | t=-1.0           | **Null** |
+| Baseline momentum 12-1                          | +0.14 net     | [-0.27, 0.64]    | Weak    |
+
+## The broader conclusion
+
+**Eight directional or execution-related tests across individual stocks,
+ETFs, and VIX. Zero are statistically significant positive at 95%.** Two
+are marginally positive (VIX regime gate, intraday front-load) with
+wide CIs; the rest are null or negative.
+
+**What this project has actually produced:**
+1. A validated library for DFA, modified R/S, FFD, MF-DFA on synthetic
+   and real data.
+2. A cross-sectional backtest harness with cost model, bootstrap CIs,
+   embargoed walk-forward, and composition analysis.
+3. A reproducible demonstration that **retail fractal alpha on
+   yfinance-accessible instruments is not present to a statistically
+   detectable degree**.
+4. Three distinct methodological artifacts worth keeping:
+   - Embargo audit (GBM Sharpe 1.84 -> 0.015 after fix)
+   - Composition audit (ETF Sharpe -0.48 was a commodity/EM bet)
+   - Residualization (R^2 0.996 showing how little H adds on top of
+     asset class + vol)
+5. The one borderline positive is the VIX MF-DFA regime gate; its point
+   estimate is positive but the 95% CI straddles zero with 231 obs.
+
+If this were a professional shop with paid data (delisting-aware,
+minute-bar going back 20 years, options data), the next logical step
+would be:
+- re-run the Hurst sort with a bias-free universe and see if the
+  survivorship haircut was masking real weak alpha (unlikely but
+  possible)
+- apply the VIX regime gate at higher frequency with options as the
+  trading vehicle
+- run MF-DFA on realized volatility for options vol-of-vol trades
+
+On yfinance and retail access, this is as far as the methodology can go.
