@@ -50,6 +50,60 @@ def sp1500_tickers() -> list[str]:
     return sorted(set(sp500_tickers()) | set(sp400_tickers()) | set(sp600_tickers()))
 
 
+def etf_universe() -> dict[str, str]:
+    """Curated ETF universe with asset-class tags.
+
+    Keys are yfinance tickers, values are asset-class labels. Selected for
+    liquidity and availability of >= 15-year history. Intended for
+    cross-asset cross-sectional studies where H dispersion may be wider
+    than within pure US equities.
+    """
+    return {
+        # US equity sectors (SPDR Select Sector)
+        "XLK": "us_sector_tech", "XLF": "us_sector_fin", "XLE": "us_sector_energy",
+        "XLV": "us_sector_health", "XLP": "us_sector_staples", "XLY": "us_sector_discr",
+        "XLI": "us_sector_ind", "XLU": "us_sector_utility", "XLB": "us_sector_mat",
+        # US broad / style
+        "SPY": "us_broad", "QQQ": "us_broad", "IWM": "us_broad",
+        "VTI": "us_broad", "IWB": "us_broad",
+        "IWD": "us_style_lg_value", "IWF": "us_style_lg_growth",
+        "IWN": "us_style_sm_value", "IWO": "us_style_sm_growth",
+        # International developed
+        "EFA": "intl_developed", "VEA": "intl_developed",
+        "EWJ": "intl_japan", "EWG": "intl_germany", "EWU": "intl_uk",
+        "EWA": "intl_australia", "EWC": "intl_canada", "EWH": "intl_hongkong",
+        "EWI": "intl_italy", "EWP": "intl_spain", "EWQ": "intl_france",
+        "EWL": "intl_switzerland", "EWT": "intl_taiwan", "EWS": "intl_singapore",
+        "EWY": "intl_korea", "EZU": "intl_eurozone", "EPP": "intl_asiapac_exjp",
+        # Emerging markets
+        "EEM": "em_broad", "VWO": "em_broad",
+        "INDA": "em_india", "FXI": "em_china",
+        "EWZ": "em_brazil", "EWW": "em_mexico",
+        "EPOL": "em_poland", "EZA": "em_safrica", "TUR": "em_turkey",
+        # Fixed income
+        "TLT": "bonds_lg_treasury", "IEF": "bonds_md_treasury",
+        "SHY": "bonds_sh_treasury",
+        "LQD": "bonds_ig_corp", "HYG": "bonds_hy_corp",
+        "AGG": "bonds_aggregate", "TIP": "bonds_tips",
+        "EMB": "bonds_em",
+        # Commodities / FX
+        "GLD": "commodity_gold", "SLV": "commodity_silver",
+        "USO": "commodity_oil", "UNG": "commodity_natgas",
+        "DBA": "commodity_ag", "DBC": "commodity_broad",
+        "UUP": "fx_usd", "FXE": "fx_eur",
+        # Real estate / alternatives
+        "VNQ": "reit_us", "IYR": "reit_us", "PFF": "preferred_stock",
+    }
+
+
+def etf_tickers() -> list[str]:
+    return sorted(etf_universe().keys())
+
+
+def etf_asset_class(ticker: str) -> str:
+    return etf_universe().get(ticker, "unknown")
+
+
 def liquid_watchlist() -> list[str]:
     """Handful of very liquid US stocks / ETFs for intraday studies."""
     return sorted({

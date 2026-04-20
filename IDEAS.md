@@ -339,36 +339,41 @@ Done:
 - [x] Cross-sectional sort backtest harness **with bootstrap CI and TC model**.
 - [x] Hurst distribution diagnostic on S&P 100 (narrow - ~Lo 1991 finding).
 - [x] Hurst sort on S&P 100 (S1).
-- [x] **Hurst sort on S&P 600 (small caps).** Same narrow distribution,
-  Sharpe -0.22 net of costs, 95% CI straddles zero. Null.
-- [x] Frac-diff as standalone cross-sectional factor (A3): null.
-- [x] **S2 proper: FFD + momentum + vol features in LightGBM with 22-day
-  embargoed walk-forward.** Initial Sharpe 1.84 WAS LEAKAGE. After embargo
+- [x] Hurst sort on S&P 600 (small caps). Null.
+- [x] Frac-diff as standalone cross-sectional factor (A3). Null.
+- [x] S2 proper: FFD + momentum + vol features in LightGBM with 22-day
+  embargoed walk-forward. Initial Sharpe 1.84 WAS LEAKAGE. After embargo
   fix: Sharpe 0.015 / -0.08 net. Null.
-- [x] **S4 intraday hourly seasonality.** Open hour has 2.4x mean |return|.
+- [x] S4 intraday hourly seasonality. Open hour has 2.4x mean |return|.
   Classical microstructure reproduced. Execution alpha only.
+- [x] **ETF cross-asset Hurst sort.** Sharpe -0.48 net, 95% CI just
+  crosses zero. Composition analysis shows the sort is a long
+  commodities+EM / short bonds+developed regime bet, not a fractal edge.
+  Hurst proxies asset-class fundamentals.
 
-Nearly pointless given null findings (deprioritized):
-- [ ] S3 Lo-filtered trend universe (expected to also be null given the
-  tight H dispersion we've seen repeatedly).
+Nearly pointless given accumulated null findings:
+- [ ] S3 Lo-filtered trend universe.
 
-Still worth doing:
-- [ ] **ETF-level H sort** - never tested. Country/sector/style ETFs might
-  show wider H dispersion than individual stocks because they aggregate
-  noise. If anything in this family would work, it is this.
-- [ ] **Reality-check the S4 intraday result on a real broker** - even 1-2
-  bps per trade is compounding over a year of active trading.
-- [ ] MF-DFA on SPX vs VIX (A5) for volatility regime - diagnostic, not
-  directional.
+Potentially salvageable but need new approaches:
+- [ ] **Residualized Hurst** - regress H on asset class + vol,
+  sort on the residual. Might isolate genuine fractal content from
+  asset-class noise. This is the single remaining respectable directional
+  test.
+- [ ] **MF-DFA on VIX vs SPX realized vol** (A5) as a volatility regime
+  indicator, feeding options strategies.
+- [ ] Reality-check S4 intraday result with live broker execution data.
 - [ ] Carr-Madan BS/Heston pricer (B1) - purely educational at this point.
 
-## The lesson to encode going forward
+## The two lessons to encode going forward
 
-Four directional fractal ideas, four nulls. The infrastructure (bootstrap
-CI, cost model, walk-forward with embargo) is the durable win from this
-project. The GBM embargo bug (Sharpe went from 1.84 to 0.015 after fix) is
-the single most valuable artifact here: **any future walk-forward
-backtest in this repo must have its embargo examined before we celebrate a
-Sharpe**.
+1. **Embargo every walk-forward CV.** The GBM embargo bug (Sharpe 1.84 ->
+   0.015 after fix) is the single most valuable artifact here. Any future
+   backtest in this repo must audit its embargo before celebrating a
+   Sharpe.
+2. **Compositional analysis on every sort.** The ETF sort's Sharpe -0.48
+   was the *consequence* of an unintended long-commodities / short-bonds
+   tilt. If we hadn't logged the composition, we might have concluded
+   "Hurst has anti-alpha on ETFs" rather than "Hurst ranks ETFs by asset
+   class." Always ask: *what is the sort actually holding?*
 
 Updates are appended to [`RESULTS.md`](RESULTS.md).

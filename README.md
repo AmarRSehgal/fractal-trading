@@ -60,26 +60,32 @@ All net-of-cost Sharpes use 10bps per side with 95% bootstrap CI.
 | S1: Hurst sort, S&P 600 (small caps)   | -0.22      | [-0.78, 0.33]  | **Null** |
 | A3: FFD as standalone factor           |  0.01      | wide           | **Null** |
 | S2: FFD + mom + vol in LightGBM (embargoed) | -0.08 | [-0.58, 0.43] | **Null** |
+| **S1: Hurst sort, ETFs (cross-asset)** | **-0.48**  | [-1.06, 0.03]  | **Negative (regime bet)** |
 | Baseline: 12-1 momentum                |  0.14      | [-0.27, 0.64]  | Weak    |
 | S4: Intraday seasonality diagnostic    | N/A        | N/A            | **Real** (execution signal) |
 
 Key findings:
-1. **Narrow H dispersion.** Both S&P 100 and S&P 600 show mean H ~0.47 with
-   std ~0.03. Only ~5% reject Lo's null at 95% (about what chance gives).
-   My hypothesis that small-caps would have wider H was wrong.
+1. **Narrow H dispersion in US equities.** Both S&P 100 and S&P 600 show
+   mean H ~0.47 with std ~0.03. Only ~5% reject Lo's null at 95% (about
+   what chance gives). My hypothesis that small-caps would have wider H
+   was wrong.
 2. **Leakage was the GBM Sharpe, not model skill.** First walk-forward
    gave Sharpe 1.84 - but training rows within 21 BDays of the test date
    had targets overlapping the test period. With a 22-day embargo the
-   Sharpe collapsed to 0.015. See `scripts/07_gbm_walkforward.py`.
-3. **Intraday volatility concentrates at market open** - 2.4x the mean
-   of all intraday hours. Classical microstructure finding, but
-   quantified per-stock and reusable.
+   Sharpe collapsed to 0.015.
+3. **Intraday volatility concentrates at market open** - 2.4x the mean of
+   all intraday hours. Classical microstructure finding but quantified
+   per-stock and reusable.
+4. **Cross-asset ETF Hurst sort is a macro regime bet in disguise.**
+   Wider dispersion yes, but composition analysis reveals the sort is
+   always long commodities+EM and short bonds+developed-ex-US - the
+   wrong side of 2010-2026's macro. Hurst on ETFs proxies asset-class
+   fundamentals, not long memory.
 
-**Interpretation.** Four directional fractal tests, four nulls. The
-durable win of this project is the **infrastructure** (bootstrap CIs, TC
-model, embargoed walk-forward). The intellectual win is the embargo
-discovery - any future backtest in this repo must check embargo before
-celebrating a Sharpe.
+**Interpretation.** Five directional fractal tests. Four nulls, one
+structural negative. The durable wins are the **infrastructure** (bootstrap
+CIs, TC model, embargoed walk-forward, composition analysis) and two
+methodological lessons: always audit embargo; always audit composition.
 
 See `RESULTS.md` for full numbers and `IDEAS.md` for what's still worth doing.
 

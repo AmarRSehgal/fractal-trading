@@ -304,25 +304,150 @@ post-2000.
 | A5 MF-DFA regime                             | TODO   | Unknown |
 | B1 Carr-Madan pricer                         | TODO   | Educational |
 
+---
+
+## 2026-04-20: ETF cross-asset Hurst sort (last directional idea)
+
+**Script:** `scripts/08_etf_hurst_sort.py`
+**Period:** 2008-01 through 2026-04 (182 monthly rebalances)
+**Universe:** 63 ETFs (equity sectors, US/intl/EM equities, bonds,
+ commodities, FX, REITs) with curated asset-class tags
+
+### H distribution by broad asset class
+
+| Class        | N  | Mean H | Std H |
+|--------------|----|--------|-------|
+| commodity    | 6  | 0.519  | 0.052 |
+| international| 17 | 0.512  | 0.017 |
+| fx           | 2  | 0.503  | 0.006 |
+| em           | 9  | 0.502  | 0.026 |
+| bonds        | 8  | 0.502  | 0.033 |
+| reit         | 2  | 0.498  | 0.002 |
+| us (equity)  | 18 | 0.488  | 0.022 |
+| preferred    | 1  | 0.476  | -     |
+
+**Dispersion is still narrow.** Commodity is the widest at std 0.052 but
+most classes sit in 0.02-0.03, similar to the individual-stock result.
+Commodities and international DM lean slightly persistent (H ~0.51-0.52);
+US equities lean slightly anti-persistent (H ~0.49). Differences are
+small and dominated by asset-class fundamentals, not fractal memory.
+
+### Backtest
+
+| Metric            | Gross    | Net (10bps/side) |
+|-------------------|----------|------------------|
+| Annual return     | -4.1%    | -4.8%            |
+| Annual vol        | 9.8%     | 9.8%             |
+| Sharpe            | -0.42    | -0.48            |
+| Max drawdown      | -58.9%   | -62.5%           |
+| Hit rate          | 42.9%    | 42.9%            |
+| Turnover / rebal  | 27.5%    | 27.5%            |
+| Sharpe 95% CI     | [-0.98, 0.09] | [-1.06, 0.03] |
+| N monthly rebals  | 182      | 182              |
+
+Point estimate is materially negative though the 95% CI just crosses zero.
+**Worse than null - the sort is systematically losing money.**
+
+### Why: composition analysis
+
+The `holdings` DataFrame tells us what the sort is actually buying and
+selling over 182 months.
+
+**Most frequent longs** (top of H distribution):
+
+| Ticker | Asset class       | % of rebals in long leg |
+|--------|-------------------|-------------------------|
+| USO    | commodity_oil     | 52%                     |
+| EMB    | bonds_em          | 51%                     |
+| EWZ    | em_brazil         | 51%                     |
+| EWS    | intl_singapore    | 48%                     |
+| DBC    | commodity_broad   | 45%                     |
+| SLV    | commodity_silver  | 43%                     |
+| EWH    | intl_hongkong     | 42%                     |
+| LQD    | bonds_ig_corp     | 42%                     |
+| TUR    | em_turkey         | 41%                     |
+| DBA    | commodity_ag      | 38%                     |
+
+**Most frequent shorts** (bottom of H distribution):
+
+| Ticker | Asset class       | % of rebals in short leg |
+|--------|-------------------|--------------------------|
+| EZA    | em_safrica        | 66%                      |
+| EWU    | intl_uk           | 32%                      |
+| TIP    | bonds_tips        | 31%                      |
+| HYG    | bonds_hy_corp     | 31%                      |
+| SHY    | bonds_sh_treasury | 31%                      |
+| EWA    | intl_australia    | 30%                      |
+| FXI    | em_china          | 30%                      |
+| XLP    | us_sector_staples | 30%                      |
+| TLT    | bonds_lg_treasury | 29%                      |
+| EWJ    | intl_japan        | 27%                      |
+
+### The finding
+
+This is not a fractal strategy. It is a **macro regime bet in disguise**:
+**long commodities + EM / short bonds + developed equities**. That is
+the wrong side of the 2010-2026 macro trade. Commodities had a lost
+decade (oil -75% 2014-16, -60% in 2020); bonds rallied until 2022; US and
+developed equities compounded ~12% annual. Running this sort for 15 years
+was an implicit short position on the dominant post-GFC regime.
+
+**Hurst exponent does not purely measure long memory on cross-asset
+instruments.** It picks up asset-class fundamentals: how fast the price
+mean-reverts around its drift is dominated by carry, term premium,
+volatility clustering, and liquidity - not long-range dependence.
+
+### Conclusion
+
+Even on the most diversified, highest-dispersion universe we tried, the
+cross-sectional Hurst sort generates negative alpha. The mechanism is
+clear from composition analysis: Hurst rankings proxy asset-class mix,
+and the resulting portfolio is an asset-class bet without style-timing.
+
+Any future strategy in this repo should **control for asset-class means**
+before using Hurst as a signal - or, more practically, **stop using
+raw Hurst as a ranking signal** and instead use Hurst residuals after
+regressing out asset-class and volatility.
+
+---
+
+## Summary - all five directional tests done
+
+| Experiment                                      | Sharpe net | 95% CI          | Verdict |
+|-------------------------------------------------|-----------:|-----------------|---------|
+| S1 Hurst sort S&P 100                           | ~0.23 est  | wide            | Weak    |
+| S1 Hurst sort S&P 600 (small caps)              | -0.22      | [-0.78, 0.33]   | Null    |
+| A3 FFD as standalone factor S&P 100             |  0.01      | wide            | Null    |
+| S2 GBM w/ FFD+mom+vol embargoed                 | -0.08      | [-0.58, 0.43]   | Null    |
+| **S1 Hurst sort ETFs (cross-asset)**            | **-0.48**  | [-1.06, 0.03]   | **Negative (regime bet)** |
+| S4 Intraday seasonality (execution diagnostic)  | N/A        | -               | Real signal |
+| Baseline momentum 12-1                          |  0.14      | [-0.27, 0.64]   | Weak    |
+
 ## Honest state of play
 
-**Four of the five directional/cross-sectional fractal ideas are now
-tested against realistic walk-forward CV with embargo, transaction costs,
-and bootstrap CIs. All four are null.** The narrow H dispersion on US
-equities (large and small caps), the absence of FFD edge in a GBM, and the
-collapse of the GBM Sharpe after embargo all point the same direction:
-**retail fractal alpha on US stocks is not meaningfully present.**
+**Five directional fractal tests on retail-accessible US instruments.
+Four nulls, one structural negative.** The last test (ETF cross-asset)
+was the strongest candidate because of wider H dispersion across asset
+classes; it still failed, and the composition analysis shows *why* -
+Hurst correlates with asset-class fundamentals more than with genuine
+long memory.
 
-The single positive finding is S4 (intraday volatility concentration at
-open) which is classical microstructure, not new, and is execution alpha
-rather than directional. It can still be valuable if you actively trade.
+**Durable wins from this project:**
+1. Validated DFA / modified R/S / FFD estimators in `src/fractal_trading/`.
+2. Cross-sectional backtest harness with cost model, bootstrap CIs, and
+   the embargo fix.
+3. The intraday seasonality signal at market open (real, reproducible).
+4. The embargo-catch GBM result (Sharpe 1.84 -> 0.015 after fix) as a
+   worked example of why walk-forward leakage analysis matters.
+5. Composition analysis pattern (what is the sort actually holding?) -
+   essential for any future factor strategy to avoid "alpha in name only."
 
-If I were choosing what to do next, I would:
-1. **Stop burning time on directional fractal strategies for US equities.**
-2. Build out S4 into a proper execution timing module on a real trading
-   account.
-3. Investigate whether any **ETF-level** strategies (country, sector,
-   style) show wider H dispersion - we haven't tested that yet.
-4. Apply the now-validated backtest harness (costs, bootstrap CIs, embargo)
-   to any other factor ideas the user actually wants to test - the
-   infrastructure work is the lasting value of this project.
+If further work happens on this repo, pivot away from directional fractal
+strategies on retail instruments. Three genuinely open questions remain:
+
+- **S4 intraday execution** scaled into a real trading workflow.
+- **Residualized Hurst**: regress H on asset-class + vol, use the
+  residual as the sorting factor. Might isolate genuine fractal content
+  from asset-class noise.
+- **MF-DFA on VIX / realized vol** as a regime indicator for option
+  strategies - still untested.
