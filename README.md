@@ -157,8 +157,8 @@ Key findings:
    traded. Fixing it moved the GBM from +0.02 to -0.07 and the FFD factor
    from ~0.01 to -0.31. High-turnover strategies were the most flattered.
 
-**Interpretation.** Ten directional + execution tests plus the baseline
-replication. **Zero** reject zero at 95%; the two that once looked marginal
+**Interpretation.** Nine directional + execution tests plus the baseline
+replication -- ten in total. **Zero** reject zero at 95%; the two that once looked marginal
 were both leakage, and every net number was additionally flattered by a 2x
 cost discount. The durable output is the **infrastructure** (bootstrap CIs
 i.i.d. *and* block, a cost model that charges notional traded, embargoed

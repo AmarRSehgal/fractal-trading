@@ -333,9 +333,9 @@ Every strategy must pass:
 ## STATUS: CLOSED (2026-09-01)
 
 **This research program is a completed negative result. Do not pick an idea
-off this list expecting it to work.** Ten experiments plus the baseline
-replication, zero rejections at 95%, and the two that once looked marginal
-turned out to be lookahead. The decisive finding is not any single null - it
+off this list expecting it to work.** Nine experiments plus the baseline
+replication -- ten in total -- zero rejections at 95%, and the two that once
+looked marginal turned out to be lookahead. The decisive finding is not any single null - it
 is that the instrument could not have resolved the effect:
 
 > The DFA standard error at the 500-day lookback every backtest here uses is

@@ -951,8 +951,8 @@ unreachable (2011-2013) or absent (2014-2026).
 
 ## Verdict after Round 5
 
-**Ten experiments plus the baseline replication. Zero rejections.** The two
-that once looked marginal were lookahead; every net-of-cost number was
+**Nine experiments plus the baseline replication -- ten in total. Zero
+rejections.** The two that once looked marginal were lookahead; every net-of-cost number was
 additionally flattered by a 2x cost discount; and the estimator's noise
 floor at a 500-day window (0.062) exceeds the true cross-sectional H
 dispersion it was hunting (~0.027).
