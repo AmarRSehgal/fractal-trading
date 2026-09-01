@@ -67,13 +67,30 @@ python3 scripts/12_estimator_power.py --end 2026-08-31
 python3 scripts/13_bariviera_btc.py --end 2026-08-31
 ```
 
-**Reproducibility.** Every script takes `--end`; pass it to pin a run
-(`--end 2026-04-20` reproduces the Round 1-3 numbers, `--end 2026-08-31`
-the Round 4 re-run). Left unset, `end` defaults to *today*, so the sample
-silently grows and numbers drift. Two things are still not pinned: package
-versions (no lockfile) and the S&P constituent lists, which
-`universe.py` scrapes live from Wikipedia - so a future clean checkout may
-get a different universe than the one behind these results.
+**Reproducibility.** Every script that touches market data takes `--end`;
+pass it to pin a run (`--end 2026-04-20` reproduces the Round 1-3 numbers,
+`--end 2026-08-31` the Round 4-5 re-run). Script 01 is synthetic-only and
+needs none. Left unset, `end` defaults to *today*, so the sample silently
+grows and numbers drift.
+
+Three things are still not fully pinned:
+
+- **Package versions.** No lockfile. `requirements.txt` records the versions
+  the Round 4-5 numbers came from as comments (python 3.13.12, numpy 2.4.3,
+  pandas 2.3.3, scipy 1.18.1, statsmodels 0.15.0, yfinance 1.7.0,
+  lightgbm 4.7.0).
+- **Universe membership.** `universe.py` scrapes S&P constituents live from
+  Wikipedia, so a future clean checkout may get a different universe - and a
+  different `.data_cache/` key - than the one behind these results.
+- **Intraday data (scripts 06 and 11).** yfinance serves 1h bars for only a
+  rolling ~730-day window, so `--end` pins these runs only while the parquet
+  cache survives. Once the window rolls past a pinned `--end`, that intraday
+  result is *unreproducible from the data source*, full stop. The committed
+  CSVs in `results/` are the only remaining record.
+
+The S&P 600 row of the findings table is pinned at `--end 2026-04-20`
+(the cached 603-ticker sample) because refetching 603 tickers is slow and
+rate-limited; the cost-model correction is the only thing that moved it.
 
 ## Findings (audited 2026-09-01; data through 2026-08-28)
 

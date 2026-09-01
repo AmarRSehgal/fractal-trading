@@ -12,6 +12,7 @@ Not a directional strategy on its own - execution alpha.
 Usage:
     python3 scripts/06_intraday_seasonality.py
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -47,12 +48,21 @@ def seasonality_by_hour(ohlcv_close: pd.Series, volume: pd.Series) -> pd.DataFra
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--end", default=None, help="pin for reproducibility (default: today)")
+    ap.add_argument("--days", type=int, default=700,
+                    help="lookback; yfinance serves at most ~730 days of 1h bars")
+    args = ap.parse_args()
+
     tickers = liquid_watchlist()
     print(f"Loading 1-hour bars for {len(tickers)} watchlist tickers (max 730 days)...")
 
-    # yfinance 1h interval limitation: ~730 days
-    end = pd.Timestamp.today()
-    start = (end - pd.Timedelta(days=700)).strftime("%Y-%m-%d")
+    # NOTE: --end only pins the run against the CACHE. yfinance's 1h history is
+    # a rolling ~730-day window, so a cache miss for an old --end returns
+    # nothing. Intraday results here are reproducible only while the cache
+    # survives; see README "Reproducibility".
+    end = pd.Timestamp(args.end) if args.end else pd.Timestamp.today()
+    start = (end - pd.Timedelta(days=args.days)).strftime("%Y-%m-%d")
     end_str = end.strftime("%Y-%m-%d")
 
     close_prices = load_prices(tickers, start=start, end=end_str, interval="1h", field="Close")

@@ -20,6 +20,7 @@ fitted on first 350 days; test on last 350 days.
 Usage:
     python3 scripts/11_execution_backtest.py
 """
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -38,10 +39,15 @@ RESULTS = REPO / "results"
 RESULTS.mkdir(exist_ok=True)
 
 
-def load_hourly_ohlcv(tickers: list, days: int = 700) -> pd.DataFrame:
-    """Return multi-level DataFrame (hour_ts, ticker) -> (Open, High, Low, Close, Volume)."""
-    end = pd.Timestamp.today().strftime("%Y-%m-%d")
-    start = (pd.Timestamp.today() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
+def load_hourly_ohlcv(tickers: list, days: int = 700, end: str | None = None) -> pd.DataFrame:
+    """Return multi-level DataFrame (hour_ts, ticker) -> (Open, High, Low, Close, Volume).
+
+    `end` pins the window for reproducibility, but yfinance's 1h history is a
+    rolling ~730-day window: an `end` older than that returns nothing.
+    """
+    end_ts = pd.Timestamp(end) if end else pd.Timestamp.today()
+    end = end_ts.strftime("%Y-%m-%d")
+    start = (end_ts - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
     df = yf.download(
         tickers, start=start, end=end, interval="1h",
         auto_adjust=True, progress=False, group_by="ticker", threads=True,
@@ -117,9 +123,15 @@ def strategy_costs(day_df: pd.DataFrame, profile: pd.Series) -> dict:
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--end", default=None, help="pin for reproducibility (default: today)")
+    ap.add_argument("--days", type=int, default=700,
+                    help="lookback; yfinance serves at most ~730 days of 1h bars")
+    args = ap.parse_args()
+
     tickers = liquid_watchlist()
-    print(f"Loading hourly bars for {len(tickers)} tickers, last 700 days...")
-    raw = load_hourly_ohlcv(tickers, days=700)
+    print(f"Loading hourly bars for {len(tickers)} tickers, last {args.days} days...")
+    raw = load_hourly_ohlcv(tickers, days=args.days, end=args.end)
 
     if isinstance(raw.columns, pd.MultiIndex):
         tickers_ok = [t for t in tickers if (t, "Close") in raw.columns]
