@@ -18,29 +18,37 @@ class BacktestResult:
     long_returns: pd.Series
     short_returns: pd.Series
     holdings: pd.DataFrame           # dates x tickers, weights
-    turnover: float                  # avg fraction of total weight changed per rebalance
+    turnover: float                  # avg fraction of gross book replaced per rebalance
     per_rebal_turnover: list[float] = field(default_factory=list)
+    # sum(|w_t - w_{t-1}|) per rebalance: the actual notional traded, in units
+    # of the $1-long/$1-short book that portfolio_returns is quoted against.
+    per_rebal_traded_notional: list[float] = field(default_factory=list)
 
     def net_returns(self, cost_bps_per_side: float) -> pd.Series:
-        """Subtract transaction costs based on per-rebal turnover.
+        """Subtract transaction costs from the gross long-short return.
 
-        cost_bps_per_side : one-way cost in bps. Round-trip = 2 * this.
-        Turnover is per-rebal % of weight changed; we apply cost to the
-        notional weight changed (both legs).
+        cost_bps_per_side : one-way cost in bps, paid on every trade.
+
+        Cost is charged on NOTIONAL TRADED, i.e. sum(|w_t - w_{t-1}|), which
+        already counts both the sells and the buys. `turnover` is a reported
+        ratio (notional / 2 / gross book), NOT a cost base: multiplying it by
+        2 undercharges by a factor of `gross` (= 2 for a dollar-neutral L/S),
+        which is exactly the bug this replaced. A full replacement of a
+        $1-long/$1-short book trades ~4 units of notional and costs
+        4 * cost_bps_per_side, not 2.
         """
         r = self.portfolio_returns.copy()
-        if not self.per_rebal_turnover:
+        notional = self.per_rebal_traded_notional
+        if not notional:
+            # legacy results carrying only the ratio; recover the notional
+            notional = [t * 2 * 2 for t in self.per_rebal_turnover]
+        if not notional:
             return r
-        # align: first return has no prior turnover (inception), then each
-        # subsequent rebal pays cost based on turnover at that rebal
-        # turnover_list[0] corresponds to second rebal
+        # notional[0] is the trade at the SECOND rebalance; inception is free.
         cost = pd.Series(0.0, index=r.index)
-        for i, to in enumerate(self.per_rebal_turnover):
-            # to is fraction of (long+short combined) weight replaced
-            # pay 2 * cost_bps_per_side (buying and selling the replaced piece)
-            # on the fraction changed
+        for i, nt in enumerate(notional):
             if i + 1 < len(cost):
-                cost.iloc[i + 1] = to * 2 * cost_bps_per_side / 10_000
+                cost.iloc[i + 1] = nt * cost_bps_per_side / 10_000
         return r - cost
 
     def stats(self, cost_bps_per_side: float = 0.0) -> dict:
@@ -125,6 +133,15 @@ class BacktestResult:
             lo_n, pt_n, hi_n = self.bootstrap_sharpe_ci(cost_bps_per_side, n_boot=n_boot)
             lines.append(f"{'sharpe_ci_gross':<20s} [{lo_g:.3f}, {hi_g:.3f}]  pt {pt_g:.3f}")
             lines.append(f"{'sharpe_ci_net':<20s} [{lo_n:.3f}, {hi_n:.3f}]  pt {pt_n:.3f}")
+            # Monthly L/S returns are non-overlapping, so the i.i.d. CI above is
+            # normally admissible -- but not always: hurst_ls_returns_sp100 has
+            # Ljung-Box p = 0.004. Always print the dependence-robust CI too and
+            # believe the WIDER one.
+            blk = sharpe_ci(
+                self.net_returns(cost_bps_per_side).dropna().values,
+                periods_per_year=12.0, n_boot=n_boot, seed=0, expected_block=3.0)
+            lines.append(f"{'sharpe_ci_net_block':<20s} "
+                         f"[{blk['lo']:.3f}, {blk['hi']:.3f}]  pt {blk['point']:.3f}")
         return "\n".join(lines)
 
 
@@ -152,6 +169,7 @@ def cross_sectional_sort_backtest(
     holdings_list = []
     prev_h = pd.Series(0.0, index=common_cols)
     turnover_list = []
+    notional_list = []
 
     for date in signal.index:
         row = signal.loc[date].dropna()
@@ -177,11 +195,14 @@ def cross_sectional_sort_backtest(
         h.loc[shorts] = -1.0 / len(shorts)
         holdings_list.append(h.rename(date))
 
-        # turnover as L1 distance in weights divided by 2 (gross weight changed)
+        # notional traded = L1 weight change (counts both sells and buys);
+        # turnover is that expressed as a fraction of the gross book.
         if prev_h.abs().sum() > 0:
-            diff = (h - prev_h).abs().sum() / 2
+            traded = float((h - prev_h).abs().sum())
             total_gross = h.abs().sum()
-            turnover_list.append(float(diff / total_gross) if total_gross > 0 else np.nan)
+            notional_list.append(traded)
+            turnover_list.append(
+                float(traded / 2 / total_gross) if total_gross > 0 else np.nan)
         prev_h = h
 
     def _to_series(xs):
@@ -198,6 +219,7 @@ def cross_sectional_sort_backtest(
         holdings=holdings_df,
         turnover=float(np.mean(turnover_list)) if turnover_list else np.nan,
         per_rebal_turnover=turnover_list,
+        per_rebal_traded_notional=notional_list,
     )
 
 
@@ -228,6 +250,7 @@ def rolling_factor(
             except Exception:
                 out.loc[date, ticker] = np.nan
     return out.astype(float)
+
 
 # --- Bootstrap utilities -------------------------------------------------
 #

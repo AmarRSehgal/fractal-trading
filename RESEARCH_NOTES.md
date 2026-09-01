@@ -102,6 +102,23 @@ approach* - Economics Letters (arXiv:1709.08090)
   present. Paper reports both and notes R/S over-detects.
 - **Replication target:** Extend the analysis through 2026 and see whether H
   has stayed near 0.5 or re-diverged. That's a direct first notebook.
+- **DONE, Round 5** - `scripts/13_bariviera_btc.py`. Two outcomes, and the
+  first one matters more than the second:
+  1. **The 2011-2013 persistent era is not obtainable from yfinance**, whose
+     BTC-USD history starts 2014-09-17. The half of the paper that carries
+     the signal cannot be replicated on this project's data source at all.
+     Closing that gap needs a different vendor (Bitstamp/CoinDesk daily
+     history), not more code.
+  2. On 2014-2026, H has stayed at 0.5 in the only sense the estimator can
+     resolve: rolling 500-day H has std 0.033 against a 0.062 single-window
+     noise floor, and 2/185 windows fall outside the 95% no-memory band
+     (~5% expected by chance). The *full-sample* H reads 0.562, but no
+     sub-period reproduces it and Lo's modified R/S does not reject
+     (V = 1.545) - that number is regime mixing, not memory.
+- **Carry-forward lesson:** the paper's headline is a rolling-window Hurst
+  plot with no noise band on it. Any such plot on a 500-day window has a
+  +/-0.12 95% band, which is wider than the entire effect being claimed.
+  Never read a rolling-H chart without the band drawn.
 
 ### Bariviera et al. (2020), *Heterogeneity in cryptocurrencies' multifractal
 profiles* - Finance Research Letters 39 (arXiv:2003.09720)

@@ -20,8 +20,9 @@ Compare:
   - Vs 12-1 momentum alone as baseline
 
 Usage:
-    python3 scripts/07_gbm_walkforward.py
+    python3 scripts/07_gbm_walkforward.py [--end 2026-08-31] [--cost_bps 10]
 """
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -154,15 +155,24 @@ def walk_forward_predict(
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--start", default="2005-01-01")
+    ap.add_argument("--end", default=None, help="pin for reproducibility")
+    ap.add_argument("--d", type=float, default=0.4)
+    ap.add_argument("--embargo_days", type=int, default=22,
+                    help="must exceed the 21-day target horizon; see tests/test_embargo.py")
+    ap.add_argument("--cost_bps", type=float, default=10.0)
+    args = ap.parse_args()
+
     tickers = sp100_tickers()
-    print(f"Loading {len(tickers)} S&P 100 tickers from 2005...")
-    prices = load_prices(tickers, start="2005-01-01")
+    print(f"Loading {len(tickers)} S&P 100 tickers from {args.start}...")
+    prices = load_prices(tickers, start=args.start, end=args.end)
     prices = prices.dropna(axis=1, thresh=int(len(prices) * 0.8))
     print(f"  after filter: {prices.shape}")
 
     print("Building features...")
     t0 = time.time()
-    features = build_features(prices, d=0.4)
+    features = build_features(prices, d=args.d)
     print(f"  {time.time() - t0:.1f}s")
 
     print("Assembling panel...")
@@ -173,7 +183,8 @@ def main():
     lib = "lightgbm" if USE_LGB else "sklearn GBM"
     print(f"Walk-forward training with {lib}...")
     t0 = time.time()
-    preds = walk_forward_predict(panel, feature_cols, train_years=5)
+    preds = walk_forward_predict(panel, feature_cols, train_years=5,
+                                 embargo_days=args.embargo_days)
     print(f"  {time.time() - t0:.1f}s, {len(preds)} predictions")
 
     if preds.empty:
@@ -189,11 +200,11 @@ def main():
     # Run both backtests
     print("\nBacktesting GBM predictions...")
     r_gbm = cross_sectional_sort_backtest(factor_gbm, prices, n_quantiles=5, min_names_per_leg=5)
-    print(r_gbm.report(title="GBM walk-forward L/S", cost_bps_per_side=10.0))
+    print(r_gbm.report(title="GBM walk-forward L/S", cost_bps_per_side=args.cost_bps))
 
     print("\nBacktesting 12-1 momentum baseline...")
     r_mom = cross_sectional_sort_backtest(factor_mom, prices, n_quantiles=5, min_names_per_leg=5)
-    print(r_mom.report(title="Momentum 12-1 L/S (baseline)", cost_bps_per_side=10.0))
+    print(r_mom.report(title="Momentum 12-1 L/S (baseline)", cost_bps_per_side=args.cost_bps))
 
     # Feature importance diagnostic: refit on full panel to extract
     if USE_LGB and len(panel) > 1000:
@@ -210,8 +221,8 @@ def main():
     r_mom.portfolio_returns.to_csv(RESULTS / "mom_baseline_returns.csv", header=["return"])
 
     summary = pd.DataFrame({
-        "gbm": r_gbm.stats(cost_bps_per_side=10.0),
-        "momentum_baseline": r_mom.stats(cost_bps_per_side=10.0),
+        "gbm": r_gbm.stats(cost_bps_per_side=args.cost_bps),
+        "momentum_baseline": r_mom.stats(cost_bps_per_side=args.cost_bps),
     })
     summary.to_csv(RESULTS / "gbm_vs_mom_stats.csv")
     print(f"\nSaved results to {RESULTS}/")

@@ -705,11 +705,17 @@ by ignoring serial correlation in overlapping returns. Findings:
   resampling is admissible. Measured |lag-1 autocorrelation| <= 0.15 on
   all nine committed return series.
 - **But the docstring's blanket reassurance is wrong in one live case.**
-  `hurst_ls_returns_sp100` has lag-1 autocorrelation +0.15 and Ljung-Box
-  p = 0.006. Its i.i.d. CI is [+0.03, +0.92] - excluding zero - while the
-  stationary-block CI is [-0.12, +1.03], which includes it. The one
-  experiment the README called "Weak" rather than "Null" was the one
-  where the bootstrap choice changed the verdict.
+  `hurst_ls_returns_sp100` has lag-1 autocorrelation +0.17 and Ljung-Box
+  p = 0.004 - the one series of the nine with real serial dependence.
+  *At the April cutoff* its i.i.d. CI was [+0.03, +0.92] - excluding zero -
+  while the stationary-block CI was [-0.12, +1.03], which includes it. The
+  one experiment the README called "Weak" rather than "Null" was the one
+  where the bootstrap choice changed the verdict. On the extended sample
+  the point estimate has fallen enough that both bootstraps now include
+  zero (i.i.d. [-0.08, +0.81], block [-0.31, +0.78]), so the verdict no
+  longer hinges on the choice - but the dependence is still there, which
+  is why `report()` now always prints the block CI alongside the i.i.d.
+  one. When they disagree, believe the wider.
 - Added `stationary_bootstrap_indices`, `sharpe_ci(expected_block=...)`
   and `paired_sharpe_diff_ci` to `backtest.py`. The paired version matters
   for gate-vs-benchmark claims: the two series share the same underlying
@@ -770,17 +776,25 @@ Is mean H = 0.467 genuine anti-persistence, or DFA reacting to fat tails
 and volatility clustering? Shuffling each stock's own returns destroys all
 temporal structure (true H = 0.5) while preserving the marginal:
 
-| series (S&P 100, n=99, full sample) | mean H | std   |
-|-------------------------------------|--------|-------|
-| real returns                        | 0.4668 | 0.0353 |
-| shuffled returns                    | 0.4982 | 0.0147 |
+| series (S&P 100, n=90, full sample) | mean H | std    |
+|-------------------------------------|--------|--------|
+| real returns                        | 0.4654 | 0.0345 |
+| shuffled returns (single draw)      | 0.5000 | 0.0215 |
 
-DFA reads 0.498 on the shuffled data, so it is unbiased for this data's
-distribution and the -0.031 gap in real data is genuine temporal
-structure. This also gives a data-native noise floor of 0.0147 at full
-sample, implying a true cross-sectional H dispersion of ~0.032 - real,
-but only about half the 500-day estimator noise, which is exactly why
-nothing survives at tradeable horizons.
+DFA reads 0.5000 on the shuffled data, so it is unbiased for this data's
+distribution and the **-0.035** gap in real data is genuine temporal
+structure. This also gives a data-native noise floor of 0.0215 at full
+sample, implying a true cross-sectional H dispersion of ~0.027 - real,
+but well under half the 500-day estimator noise (0.062), which is exactly
+why nothing survives at tradeable horizons.
+
+*Correction.* An earlier version of this table averaged 3 shuffles per
+stock and reported the dispersion floor as 0.0147. That is wrong: averaging
+k shuffles shrinks estimator noise by ~sqrt(k), so it understates the floor
+and overstates the implied true dispersion (0.032 rather than 0.027). The
+floor must come from a **single** shuffle per stock, which is what script 12
+now uses. The shuffled *mean* is still averaged over 3 draws - averaging is
+correct there, since the mean is the quantity being estimated.
 
 ## G. Out-of-sample extension to 2026-08-28
 
@@ -824,5 +838,129 @@ experiment here ran on US equities, the asset class with the weakest prior
 for H != 0.5. The program tested its hypothesis where it was least likely
 to hold, and did so with an estimator whose 500-day noise floor exceeded
 the effect it was looking for.
+
+This is a completed negative result. Write it up and stop.
+
+---
+
+# Round 5 - 2026-09-01: cost accounting, and the missing baseline
+
+Round 4 audited the estimator and the embargo. This round audited the two
+things it did not: the **cost model** and the **baseline replication the
+whole program was supposed to start from**. Both were wrong, and both
+push in the same direction as everything else.
+
+## I. Transaction costs were undercharged by exactly 2x
+
+`BacktestResult.net_returns` charged `turnover * 2 * cost_bps`. But
+`turnover` had already been normalized by the gross book:
+
+    traded_notional = sum(|w_t - w_{t-1}|)          # counts sells AND buys
+    turnover        = traded_notional / 2 / gross   # gross = 2 for $1 long + $1 short
+
+so `turnover * 2` recovers `traded_notional / gross`, not `traded_notional`.
+For a dollar-neutral long/short book that is half the real cost. A complete
+replacement of a $1-long/$1-short book trades ~4 units of notional and costs
+`4 * cost_bps`; the harness charged `2 * cost_bps`.
+
+Verified directly: a factor engineered to flip its ranking every month
+produces 3.89 units of traded notional per rebalance on a 2.0-gross book.
+The old code charged 20.0bps at 10bps/side where 38.9bps was owed.
+
+Cost is now charged on `per_rebal_traded_notional`, a new field carrying
+`sum(|dw|)` per rebalance. The reported `turnover` metric keeps its old
+meaning so historical stats CSVs stay comparable - only the cost base moved.
+`tests/test_costs.py` (5 tests) pins the arithmetic, including a back-compat
+path for results carrying only the old ratio.
+
+**Effect on every net-of-cost number in the repo** (S&P 100 / ETF / GBM runs
+re-run through 2026-08-28; costs 10bps per side):
+
+| Experiment | net Sharpe, old (2x discount) | net Sharpe, corrected |
+|------------|------------------------------:|----------------------:|
+| Hurst sort, S&P 100        | 0.309  | **0.248** |
+| Momentum 12-1 baseline     | 0.105  | **0.074** |
+| GBM embargoed walk-forward | 0.024  | **-0.074** |
+| Residualized Hurst, ETFs   | -0.190 | **-0.269** |
+| Plain Hurst sort, ETFs     | -0.527 | **-0.594** |
+| FFD standalone factor      | ~0.01  | **-0.311** |
+| FFD + momentum combined    | ~0.10  | **-0.224** |
+
+The high-turnover strategies are hit hardest, which is the point: the FFD
+factor turns over 0.61 of the book per month against momentum's 0.24, and
+the 2x cost discount had been hiding most of that penalty. **The GBM
+crosses from marginally positive to negative.** No verdict flips toward
+significance; three move further from it.
+
+Full corrected stats for the headline S&P 100 sort:
+
+| metric | gross | net |
+|--------|------:|----:|
+| ann_return | 0.0400 | 0.0267 |
+| ann_vol    | 0.1079 | 0.1080 |
+| sharpe     | 0.3708 | 0.2477 |
+| max_drawdown | -0.2964 | -0.3174 |
+| i.i.d. 95% CI  | [-0.082, +0.807] | [-0.209, +0.684] |
+| block 95% CI   | -                | [-0.313, +0.778] |
+
+`report()` now always prints the block-bootstrap CI next to the i.i.d. one.
+When they disagree, believe the wider.
+
+## J. The Bariviera baseline, finally run - and it cannot be run
+
+`RESEARCH_NOTES.md` named Bariviera (2017) as "a direct first notebook" and
+the empirical anchor for the entire Hurst-as-regime-indicator premise. It
+was never executed. Script 13 executes it.
+
+His claim: BTC is strongly persistent in 2011-2013 (H > 0.55) and drifts to
+H ~ 0.5 as the market matures.
+
+**The persistent era is not in this repo's data source.** yfinance's
+BTC-USD history begins **2014-09-17** (ETH-USD: 2017-11-09). The half of the
+paper carrying the signal is unavailable. This is not a null result - the
+experiment is infeasible on free data.
+
+What *is* testable is the era Bariviera says has already converged:
+
+| window | n | DFA H | noise floor | outside 95% band |
+|--------|--:|------:|------------:|:----------------:|
+| full sample 2014-2026 | 4365 | 0.562 | 0.026 | yes |
+| 2014-09 .. 2018-01    | 1202 | 0.461 | 0.041 | no |
+| 2018-01 .. 2022-01    | 1462 | 0.526 | 0.038 | no |
+| 2022-01 .. 2026-08    | 1703 | 0.500 | 0.036 | no |
+
+Rolling 500-day DFA: 185 windows, mean H 0.517, **std 0.033 against a
+single-window noise floor of 0.062**. Only 2/185 windows fall outside the
+95% no-memory band, against ~5% expected by chance. Time variation in BTC's
+Hurst exponent is *indistinguishable from estimator noise* at the window
+length this repo trades on.
+
+Note the trap in the first row: the full sample reads H = 0.562, which looks
+persistent and sits outside its own (much tighter) band - yet **no
+sub-period reproduces it** and Lo's modified R/S gives V = 1.545, well
+inside the [0.809, 1.862] no-rejection interval. That gap is regime mixing:
+DFA on a series whose volatility level shifts by orders of magnitude across
+the sample reads the level shifts as long memory. A single-number Hurst on a
+long crypto sample is an artifact generator, and it is the exact shape of
+result that would have been reported as a finding had this script been
+written in Round 1 without a noise floor attached.
+
+**So the baseline does not rescue the program.** The most-cited positive
+result in the reading list is, on the data available here, either
+unreachable (2011-2013) or absent (2014-2026).
+
+## Verdict after Round 5
+
+**Ten experiments plus the baseline replication. Zero rejections.** The two
+that once looked marginal were lookahead; every net-of-cost number was
+additionally flattered by a 2x cost discount; and the estimator's noise
+floor at a 500-day window (0.062) exceeds the true cross-sectional H
+dispersion it was hunting (~0.027).
+
+That last point is the one worth carrying forward. This program did not
+fail to find an effect - it used an instrument that could not have resolved
+the effect it was looking for, on the asset class with the weakest prior
+for that effect. Both facts were measurable up front and neither was
+measured until Round 4.
 
 This is a completed negative result. Write it up and stop.
