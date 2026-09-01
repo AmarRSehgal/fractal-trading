@@ -42,6 +42,7 @@ def main():
     parser.add_argument("--end", default=None)
     parser.add_argument("--lookback", type=int, default=500)
     parser.add_argument("--n_quantiles", type=int, default=5)
+    parser.add_argument("--cost_bps", type=float, default=10.0)
     args = parser.parse_args()
 
     tickers = dow30_tickers() if args.universe == "dow30" else sp100_tickers()
@@ -60,13 +61,12 @@ def main():
         factor, prices, n_quantiles=args.n_quantiles, min_names_per_leg=5,
     )
 
-    stats = result.stats
     print()
-    print("=" * 60)
-    print(f"Hurst sort L/S ({args.universe}, top Q{args.n_quantiles} vs bottom)")
-    print("=" * 60)
-    for k, v in stats.items():
-        print(f"  {k:<15s} {v:.4f}" if isinstance(v, float) else f"  {k:<15s} {v}")
+    print(result.report(
+        title=f"Hurst sort L/S ({args.universe}, top Q{args.n_quantiles} vs bottom)",
+        cost_bps_per_side=args.cost_bps,
+    ))
+    stats = result.stats(cost_bps_per_side=args.cost_bps)
 
     # Save outputs
     result.portfolio_returns.to_csv(RESULTS / f"hurst_ls_returns_{args.universe}.csv", header=["return"])

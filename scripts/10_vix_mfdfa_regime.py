@@ -14,6 +14,7 @@ Outputs:
 Usage:
     python3 scripts/10_vix_mfdfa_regime.py
 """
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -23,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import numpy as np
 import pandas as pd
 
+from fractal_trading.backtest import paired_sharpe_diff_ci, sharpe_ci
 from fractal_trading.data import load_prices
 from fractal_trading.mfdfa import mfdfa
 from fractal_trading.hurst import dfa
@@ -52,9 +54,16 @@ def rolling_mfdfa(series: np.ndarray, dates, lookback: int = 500, step: int = 21
 
 
 def main():
-    print("Loading VIX, SPY, UVXY/VXX...")
-    df_vix = load_prices(["^VIX"], start="2005-01-01")
-    df_spy = load_prices(["SPY"], start="2005-01-01")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start", default="2005-01-01")
+    parser.add_argument("--end", default=None, help="pin for reproducibility")
+    parser.add_argument("--min_warmup", type=int, default=40,
+                        help="rebalances required before the causal gate trades")
+    args = parser.parse_args()
+
+    print("Loading VIX, SPY...")
+    df_vix = load_prices(["^VIX"], start=args.start, end=args.end)
+    df_spy = load_prices(["SPY"], start=args.start, end=args.end)
     # flatten
     vix = df_vix.iloc[:, 0].dropna()
     spy = df_spy.iloc[:, 0].dropna()
@@ -113,19 +122,59 @@ def main():
         r = df["h_at_q2"].corr(df[col])
         print(f"  h_q=2  vs {col:<15s}  rho = {r:+.3f}")
 
-    # Naive trading rule test: high Delta h -> stay in cash, low -> long SPY
-    med = df["delta_h"].median()
-    df["regime"] = (df["delta_h"] > med).astype(int)  # 1 if complex
-    # Holding-period return of "stay in SPY only when delta_h <= median"
-    df["strategy_ret"] = np.where(df["regime"] == 0, df["spy_fwd_ret"], 0.0)
-    bh_ret = df["spy_fwd_ret"].mean() * (252 / 21)
-    bh_vol = df["spy_fwd_ret"].std() * np.sqrt(252 / 21)
-    st_ret = df["strategy_ret"].mean() * (252 / 21)
-    st_vol = df["strategy_ret"].std() * np.sqrt(252 / 21)
-    print(f"\n=== Naive regime gate ('flat when delta_h above median') ===")
-    print(f"  Buy-and-hold SPY: ann_ret {bh_ret:+.3f}  ann_vol {bh_vol:.3f}  Sharpe {bh_ret / bh_vol:.2f}")
-    print(f"  Regime-gated:     ann_ret {st_ret:+.3f}  ann_vol {st_vol:.3f}  Sharpe {st_ret / st_vol:.2f}")
-    print(f"  Time-in-market: {(df['regime'] == 0).mean() * 100:.0f}%")
+    # === Regime gate ===
+    #
+    # LOOKAHEAD WARNING: the original version of this script thresholded
+    # delta_h on its FULL-SAMPLE median, so the 2008 gate depended on 2026
+    # data. That is the leak that made this look like the best signal in the
+    # repo. Both versions are reported below; only `causal` is tradeable.
+    #
+    # Observations are non-overlapping by construction: rolling_mfdfa steps
+    # 21 trading days and the forward return spans exactly 21 trading days,
+    # so consecutive rows abut rather than overlap. An i.i.d. bootstrap is
+    # therefore admissible here; we still report a block bootstrap as a
+    # dependence-robust check.
+    df["bh_ret"] = df["spy_fwd_ret"]
+
+    # (a) in-sample / leaky: full-sample median
+    med_full = df["delta_h"].median()
+    df["gate_leaky"] = np.where(df["delta_h"] <= med_full, df["bh_ret"], 0.0)
+
+    # (b) causal: expanding median using only rebalances already observed
+    expanding_med = df["delta_h"].expanding().median().shift(1)
+    in_mkt = df["delta_h"] <= expanding_med
+    in_mkt.iloc[: args.min_warmup] = True   # no threshold yet -> hold, like BH
+    df["expanding_med"] = expanding_med
+    df["gate_causal"] = np.where(in_mkt, df["bh_ret"], 0.0)
+
+    PPY = 252 / 21          # non-overlapping 21-day periods per year
+    def _line(name, r):
+        ci = sharpe_ci(r.values, periods_per_year=PPY, n_boot=5000, seed=1)
+        return (f"  {name:<22s} ann_ret {r.mean() * PPY:+.3f}  "
+                f"ann_vol {r.std() * np.sqrt(PPY):.3f}  "
+                f"Sharpe {ci['point']:.2f}  95% CI [{ci['lo']:+.2f}, {ci['hi']:+.2f}]")
+
+    print("\n=== Regime gate: 'flat when delta_h above median' ===")
+    print(_line("buy-and-hold SPY", df["bh_ret"]))
+    print(_line("gate (LEAKY median)", df["gate_leaky"]))
+    print(_line("gate (causal median)", df["gate_causal"]))
+    print(f"  time in market: leaky {(df['gate_leaky'] != 0).mean() * 100:.0f}%  "
+          f"causal {(df['gate_causal'] != 0).mean() * 100:.0f}%")
+
+    # Paired bootstrap of the Sharpe DIFFERENCE -- this is the claim being
+    # made ("the gate beats buy-and-hold"), and it must be paired because the
+    # two series share the same underlying SPY returns.
+    print("\n=== Paired bootstrap: Sharpe(gate) - Sharpe(buy-and-hold) ===")
+    for label, col in (("leaky", "gate_leaky"), ("causal", "gate_causal")):
+        for blk in (1, 4):
+            d = paired_sharpe_diff_ci(
+                df[col].values, df["bh_ret"].values,
+                periods_per_year=PPY, n_boot=5000, seed=1, expected_block=blk,
+            )
+            kind = "iid  " if blk == 1 else "block"
+            print(f"  {label:<7s} {kind}  diff {d['point']:+.3f}  "
+                  f"95% CI [{d['lo']:+.3f}, {d['hi']:+.3f}]  "
+                  f"P(diff>0) {d['p_gt_0']:.1%}  n={d['n']}")
 
     # Save
     df.to_csv(RESULTS / "vix_mfdfa_regime.csv")
@@ -139,7 +188,7 @@ def main():
         axes[0].grid(alpha=0.3)
         axes[1].plot(df.index, df["delta_h"], color="C0", label="Delta h")
         axes[1].plot(df.index, df["h_at_q2"], color="C1", alpha=0.6, label="h(q=2)")
-        axes[1].axhline(df["delta_h"].median(), color="red", linestyle="--", alpha=0.5, label="median")
+        axes[1].plot(df.index, df["expanding_med"], color="red", linestyle="--", alpha=0.6, label="expanding median")
         axes[1].set_ylabel("MF-DFA exponents")
         axes[1].legend(); axes[1].grid(alpha=0.3)
         axes[2].plot(df.index, df["spy_fwd_vol"], color="purple")

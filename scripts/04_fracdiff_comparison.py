@@ -60,6 +60,7 @@ def main():
     parser.add_argument("--start", default="2005-01-01")
     parser.add_argument("--end", default=None)
     parser.add_argument("--d", type=float, default=0.4)
+    parser.add_argument("--cost_bps", type=float, default=10.0)
     args = parser.parse_args()
 
     tickers = sp100_tickers()
@@ -83,7 +84,7 @@ def main():
         print(f"\nBacktesting {name}...")
         r = cross_sectional_sort_backtest(factor, prices, n_quantiles=5, min_names_per_leg=5)
         results[name] = r
-        print(f"  stats: {r.stats}")
+        print(r.report(title=name, cost_bps_per_side=args.cost_bps))
 
     # Combined factor: average z-scores (normalize both first)
     mom_z = (mom - mom.rolling(252).mean()) / mom.rolling(252).std()
@@ -92,7 +93,7 @@ def main():
     print("\nBacktesting combined (equal-weighted z-scores)...")
     r_combo = cross_sectional_sort_backtest(combo, prices, n_quantiles=5, min_names_per_leg=5)
     results["combined"] = r_combo
-    print(f"  stats: {r_combo.stats}")
+    print(r_combo.report(title="combined", cost_bps_per_side=args.cost_bps))
 
     # Comparison table
     print()
@@ -100,13 +101,15 @@ def main():
     print(f"{'Factor':<20s} {'Sharpe':>8s} {'AnnRet':>8s} {'AnnVol':>8s} {'MaxDD':>8s} {'Turnover':>10s}")
     print("-" * 72)
     for name, r in results.items():
-        s = r.stats
+        s = r.stats(cost_bps_per_side=args.cost_bps)
         print(f"{name:<20s} {s['sharpe']:>8.3f} {s['ann_return']:>8.3f} "
               f"{s['ann_vol']:>8.3f} {s['max_drawdown']:>8.3f} {s['turnover']:>10.3f}")
     print("=" * 72)
 
     # Save
-    summary = pd.DataFrame({name: r.stats for name, r in results.items()}).T
+    summary = pd.DataFrame(
+        {name: r.stats(cost_bps_per_side=args.cost_bps) for name, r in results.items()}
+    ).T
     summary.to_csv(RESULTS / "fracdiff_vs_momentum_stats.csv")
     for name, r in results.items():
         r.portfolio_returns.to_csv(RESULTS / f"fracdiff_compare_{name}_returns.csv", header=["return"])

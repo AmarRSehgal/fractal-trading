@@ -644,3 +644,185 @@ would be:
 - run MF-DFA on realized volatility for options vol-of-vol trades
 
 On yfinance and retail access, this is as far as the methodology can go.
+
+---
+
+# Round 4 - 2026-08-31: methodology audit + out-of-sample extension
+
+Re-ran everything on data through **2026-08-28** (4 months of genuinely
+out-of-sample data past the Round 3 cutoff of 2026-04-17) and audited the
+machinery that produces the nulls. Interpreter: MacPorts python 3.13.12,
+numpy 2.4.3, pandas 2.3.3, statsmodels 0.15.0.
+
+## A. Two bugs that made scripts unrunnable
+
+`BacktestResult.stats` became a *method* (cost-aware) in Round 2, but
+scripts 03 and 04 still called it as a `@property`. Script 03 raised
+`AttributeError: 'function' object has no attribute 'items'`; script 04
+crashed at `s['sharpe']`. Both had been dead since Round 2 - the Round 2/3
+numbers for those experiments came from the older code. Fixed; both now
+route through `report()` and take `--cost_bps`.
+
+## B. LOOKAHEAD in the VIX regime gate (the repo's "best signal")
+
+Script 10 thresholded Δh on `df["delta_h"].median()` - the **full-sample**
+median over 2005-2026. The gate's 2008 decisions depended on 2026 data.
+
+Replacing it with an expanding-window median (only rebalances already
+observed, 40-rebalance warm-up) - data through 2026-08-28, n=235:
+
+| Variant                      | Ann ret | Ann vol | Sharpe | Time in mkt |
+|------------------------------|---------|---------|--------|-------------|
+| Buy-and-hold SPY             | +10.5%  | 16.8%   | 0.62   | 100%        |
+| Gate, full-sample median (leaky) | +8.2% | 11.5% | 0.71   | 50%         |
+| Gate, expanding median (causal)  | +4.7% | 13.0% | **0.36** | 51%      |
+
+Paired bootstrap of Sharpe(gate) - Sharpe(buy-and-hold), 5000 resamples:
+
+| Variant | Bootstrap | Diff   | 95% CI            | P(diff>0) |
+|---------|-----------|--------|-------------------|-----------|
+| leaky   | i.i.d.    | +0.087 | [-0.328, +0.499]  | 64.6%     |
+| leaky   | block(4)  | +0.087 | [-0.293, +0.436]  | 65.8%     |
+| causal  | i.i.d.    | -0.261 | [-0.582, +0.067]  |  6.1%     |
+| causal  | block(4)  | -0.261 | [-0.567, +0.051]  |  5.6%     |
+
+**The one signal in this repo that pointed somewhere was an artifact.**
+Made causal it does not merely fail to reject zero - it points negative.
+
+Two secondary notes on this script. The bootstrap that produced the
+Round 3 headline CI was never committed; it lives in the script now. And
+the observations are non-overlapping *by construction* (the rolling step
+of 21 days exactly equals the 21-day forward-return horizon), which is
+why the block bootstrap does not widen the CI here.
+
+## C. Bootstrap CI construction
+
+The audit question was whether the i.i.d. bootstrap understates CI width
+by ignoring serial correlation in overlapping returns. Findings:
+
+- **The premise mostly does not apply.** `cross_sectional_sort_backtest`
+  produces *non-overlapping monthly* L/S returns, for which i.i.d.
+  resampling is admissible. Measured |lag-1 autocorrelation| <= 0.15 on
+  all nine committed return series.
+- **But the docstring's blanket reassurance is wrong in one live case.**
+  `hurst_ls_returns_sp100` has lag-1 autocorrelation +0.15 and Ljung-Box
+  p = 0.006. Its i.i.d. CI is [+0.03, +0.92] - excluding zero - while the
+  stationary-block CI is [-0.12, +1.03], which includes it. The one
+  experiment the README called "Weak" rather than "Null" was the one
+  where the bootstrap choice changed the verdict.
+- Added `stationary_bootstrap_indices`, `sharpe_ci(expected_block=...)`
+  and `paired_sharpe_diff_ci` to `backtest.py`. The paired version matters
+  for gate-vs-benchmark claims: the two series share the same underlying
+  SPY returns, so an unpaired bootstrap would destroy their correlation.
+- `tests/test_embargo.py` includes a synthetic case proving the mechanism
+  is real when it *does* apply: on 21-day overlapping returns the block CI
+  is >1.5x the width of the i.i.d. CI.
+
+## D. Embargo: correct
+
+Verified by reading and by test. A training row at `d_train` has target
+over `[d_train, d_train + 21 trading days]`; `walk_forward_predict`
+trains on `date <= date - BDay(22)`, so the last usable label closes one
+business day before the test date. No leak.
+`test_embargo_excludes_unobservable_training_targets` runs the real
+function with a stub model and asserts the >= 21-business-day gap at
+every rebalance it predicts for.
+`test_cross_sectional_sort_has_no_lookahead` feeds the sort harness an
+oracle factor equal to the *current* month's return and asserts it earns
+nothing - it fails loudly if anyone removes the `shift(1)`.
+
+## E. Estimator validation: unbiased, but far too noisy to sort on
+
+DFA recovers known H well (200 seeds per cell):
+
+| n    | true H | mean  | bias   | std   |
+|------|--------|-------|--------|-------|
+| 500  | 0.50   | 0.497 | -0.003 | 0.062 |
+| 1000 | 0.50   | 0.496 | -0.004 | 0.045 |
+| 2000 | 0.50   | 0.497 | -0.003 | 0.032 |
+| 5300 | 0.50   | 0.500 | -0.000 | 0.026 |
+
+So the nulls are real nulls, not artifacts of a biased estimator. **But
+the standard error is the story.** At the 500-day lookback every backtest
+in this repo uses, the estimator's own noise is std 0.062, while the
+observed cross-sectional dispersion of the rolling factor is **0.056** -
+*below the noise floor*. Rank persistence of the factor confirms it:
+
+| lag (rebalances) | window overlap | Spearman rho |
+|------------------|----------------|--------------|
+| 1  (21d)   | 96%       | +0.866 |
+| 6  (126d)  | 75%       | +0.674 |
+| 12 (252d)  | 50%       | +0.426 |
+| **24 (504d)** | **0% (disjoint)** | **+0.042** |
+| 36 (756d)  | 0%        | +0.039 |
+| 48 (1008d) | 0%        | +0.089 |
+
+The apparent persistence at short lags is *shared data*, not a stable
+stock property. Across two disjoint 500-day windows the ranking is
+uncorrelated. **The Hurst sorts were sorting on noise.** That does not
+change any verdict, but it changes the meaning: those nulls are not
+evidence against cross-sectional long memory, they are evidence the
+experiment could not have detected it at this window length.
+
+## F. Shuffle control: the H = 0.467 result is real
+
+Is mean H = 0.467 genuine anti-persistence, or DFA reacting to fat tails
+and volatility clustering? Shuffling each stock's own returns destroys all
+temporal structure (true H = 0.5) while preserving the marginal:
+
+| series (S&P 100, n=99, full sample) | mean H | std   |
+|-------------------------------------|--------|-------|
+| real returns                        | 0.4668 | 0.0353 |
+| shuffled returns                    | 0.4982 | 0.0147 |
+
+DFA reads 0.498 on the shuffled data, so it is unbiased for this data's
+distribution and the -0.031 gap in real data is genuine temporal
+structure. This also gives a data-native noise floor of 0.0147 at full
+sample, implying a true cross-sectional H dispersion of ~0.032 - real,
+but only about half the 500-day estimator noise, which is exactly why
+nothing survives at tradeable horizons.
+
+## G. Out-of-sample extension to 2026-08-28
+
+Nothing improved; the point estimates drifted slightly further toward
+zero or negative.
+
+| Experiment | Round 3 (to 2026-04-17) | Round 4 (to 2026-08-28) |
+|------------|-------------------------|-------------------------|
+| Hurst sort S&P 100, net Sharpe | 0.41, CI [-0.02, 0.86] | **0.31, CI [-0.14, 0.75]** |
+| ETF plain H sort, net Sharpe   | -0.48, CI [-1.06, 0.03] | **-0.53, CI [-1.11, -0.03]** |
+| Residualized ETF, net Sharpe   | -0.13, CI [-0.65, 0.38] | **-0.19, CI [-0.72, 0.28]** |
+| GBM embargoed, net Sharpe      | 0.015 | **0.024, CI [-0.48, 0.52]** |
+| Momentum 12-1, net Sharpe      | 0.14, CI [-0.27, 0.64] | **0.11, CI [-0.32, 0.56]** |
+| VIX gate (leaky) diff          | +0.102 | **+0.087** |
+| VIX gate (causal) diff         | n/a    | **-0.261** |
+| S&P 100 mean H                 | 0.470 | **0.467, std 0.035, 3/99 reject** |
+
+Note the S&P 100 Hurst sort: at the April cutoff its *gross* i.i.d. CI
+was [+0.04, +0.92], excluding zero. Four more months plus the correct
+block bootstrap both push it back across zero. It was never a signal.
+
+## H. Reproduction status
+
+Every Round 1-3 headline number reproduces when the run is pinned with
+`--end 2026-04-20`. The Round 3 VIX bootstrap reproduces to within
+resampling noise (+0.102 / [-0.307, +0.522] / 67.6% here vs the recorded
++0.097 / [-0.298, +0.506] / 67.5%).
+
+Remaining reproducibility gaps: no dependency lockfile, and
+`universe.py` scrapes S&P constituents live from Wikipedia, so the
+universe (and therefore the parquet cache key) can drift under a future
+clean checkout. `.data_cache/` is gitignored, so a clean checkout refetches
+- verified working against yfinance 1.7.0 on 2026-08-31.
+
+## Verdict after Round 4
+
+**Nine tests, zero rejections, and both former near-misses were leakage.**
+The Bariviera replication named in `RESEARCH_NOTES.md` as "a direct first
+notebook" was never done - and it is a *crypto* result, while every
+experiment here ran on US equities, the asset class with the weakest prior
+for H != 0.5. The program tested its hypothesis where it was least likely
+to hold, and did so with an estimator whose 500-day noise floor exceeded
+the effect it was looking for.
+
+This is a completed negative result. Write it up and stop.

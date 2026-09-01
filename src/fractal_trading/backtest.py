@@ -228,3 +228,120 @@ def rolling_factor(
             except Exception:
                 out.loc[date, ticker] = np.nan
     return out.astype(float)
+
+# --- Bootstrap utilities -------------------------------------------------
+#
+# The i.i.d. bootstrap in BacktestResult.bootstrap_sharpe_ci assumes the
+# return series has no serial dependence. That is defensible for the
+# monthly, non-overlapping long-short series produced by
+# cross_sectional_sort_backtest, but it is NOT safe in general -- notably
+# for daily series or for any series built from OVERLAPPING forward-return
+# windows, where the i.i.d. bootstrap understates CI width and makes a null
+# look more precise than the data support. Use the stationary block
+# bootstrap (Politis & Romano 1994) whenever dependence is possible; it
+# resamples geometric-length blocks and so preserves short-range dependence.
+
+
+def stationary_bootstrap_indices(
+    n: int, expected_block: float, rng: np.random.Generator
+) -> np.ndarray:
+    """Politis-Romano stationary bootstrap index sample of length n.
+
+    Blocks have Geometric(1/expected_block) length and wrap circularly, so
+    the resampled series is stationary and retains serial dependence up to
+    roughly `expected_block` lags. expected_block=1 reduces to i.i.d.
+    """
+    if expected_block <= 1:
+        return rng.integers(0, n, size=n)
+    p = 1.0 / expected_block
+    idx = np.empty(n, dtype=np.int64)
+    cur = rng.integers(0, n)
+    for i in range(n):
+        idx[i] = cur
+        if rng.random() < p:
+            cur = rng.integers(0, n)
+        else:
+            cur = (cur + 1) % n
+    return idx
+
+
+def sharpe_ci(
+    returns: np.ndarray,
+    periods_per_year: float = 12.0,
+    n_boot: int = 5000,
+    alpha: float = 0.05,
+    seed: int = 0,
+    expected_block: float = 1.0,
+) -> dict:
+    """Bootstrap CI for the annualized Sharpe of a return series.
+
+    expected_block > 1 selects the stationary block bootstrap. Set it to
+    roughly the number of periods over which returns stay dependent (for
+    overlapping k-period returns sampled every period, use ~k).
+    """
+    r = np.asarray(returns, dtype=float)
+    r = r[np.isfinite(r)]
+    n = len(r)
+    if n < 12:
+        return {"lo": np.nan, "point": np.nan, "hi": np.nan, "n": n}
+    rng = np.random.default_rng(seed)
+    ann = np.sqrt(periods_per_year)
+    out = np.empty(n_boot)
+    for b in range(n_boot):
+        s = r[stationary_bootstrap_indices(n, expected_block, rng)]
+        sd = s.std()
+        out[b] = s.mean() / sd * ann if sd > 0 else np.nan
+    out = out[np.isfinite(out)]
+    lo, hi = np.quantile(out, [alpha / 2, 1 - alpha / 2])
+    point = r.mean() / r.std() * ann if r.std() > 0 else np.nan
+    return {
+        "lo": float(lo), "point": float(point), "hi": float(hi),
+        "n": n, "expected_block": float(expected_block),
+    }
+
+
+def paired_sharpe_diff_ci(
+    a: np.ndarray,
+    b: np.ndarray,
+    periods_per_year: float = 12.0,
+    n_boot: int = 5000,
+    alpha: float = 0.05,
+    seed: int = 0,
+    expected_block: float = 1.0,
+) -> dict:
+    """Bootstrap CI for Sharpe(a) - Sharpe(b) on PAIRED observations.
+
+    a and b must be the same length and aligned in time (e.g. a gated
+    strategy vs buy-and-hold over the same periods). Resampling the same
+    index set for both preserves their contemporaneous correlation, which
+    an unpaired bootstrap would destroy -- and since the two series here
+    are highly correlated, the paired CI is much tighter and is the
+    correct one for the "does the gate beat buy-and-hold" question.
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    if len(a) != len(b):
+        raise ValueError(f"paired series must align: {len(a)} vs {len(b)}")
+    ok = np.isfinite(a) & np.isfinite(b)
+    a, b = a[ok], b[ok]
+    n = len(a)
+    if n < 12:
+        return {"lo": np.nan, "point": np.nan, "hi": np.nan, "n": n}
+    rng = np.random.default_rng(seed)
+    ann = np.sqrt(periods_per_year)
+
+    def _sh(x):
+        sd = x.std()
+        return x.mean() / sd * ann if sd > 0 else np.nan
+
+    out = np.empty(n_boot)
+    for i in range(n_boot):
+        idx = stationary_bootstrap_indices(n, expected_block, rng)
+        out[i] = _sh(a[idx]) - _sh(b[idx])
+    out = out[np.isfinite(out)]
+    lo, hi = np.quantile(out, [alpha / 2, 1 - alpha / 2])
+    return {
+        "lo": float(lo), "point": float(_sh(a) - _sh(b)), "hi": float(hi),
+        "p_gt_0": float((out > 0).mean()), "n": n,
+        "expected_block": float(expected_block),
+    }
