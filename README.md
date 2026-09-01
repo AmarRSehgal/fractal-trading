@@ -158,9 +158,9 @@ Key findings:
    from ~0.01 to -0.31. High-turnover strategies were the most flattered.
 
 **Interpretation.** Nine directional + execution tests plus the baseline
-replication -- ten in total. **Zero** reject zero at 95%; the two that once looked marginal
-were both leakage, and every net number was additionally flattered by a 2x
-cost discount. The durable output is the **infrastructure** (bootstrap CIs
+replication -- ten in total. **Zero** reject zero at 95%; the two that
+once looked marginal were both leakage, and every net number was
+additionally flattered by a 2x cost discount. The durable output is the **infrastructure** (bootstrap CIs
 i.i.d. *and* block, a cost model that charges notional traded, embargoed
 walk-forward, composition + residualization audits, and an estimator
 noise-floor calibration) and five methodological lessons: audit the
