@@ -330,7 +330,25 @@ Every strategy must pass:
 
 ---
 
-## Roadmap (revised after second empirical pass - 2026-04-20)
+## STATUS: CLOSED (2026-09-01)
+
+**This research program is a completed negative result. Do not pick an idea
+off this list expecting it to work.** Ten experiments plus the baseline
+replication, zero rejections at 95%, and the two that once looked marginal
+turned out to be lookahead. The decisive finding is not any single null - it
+is that the instrument could not have resolved the effect:
+
+> The DFA standard error at the 500-day lookback every backtest here uses is
+> **0.062**. The true cross-sectional dispersion of H across S&P 100 stocks,
+> measured against a shuffle control, is **~0.027**. Rank correlation of the
+> factor across two *disjoint* 500-day windows is **+0.04**.
+
+Any Hurst-sort idea below is therefore underpowered by construction at this
+window length, and lengthening the window costs you the time variation that
+was the whole premise. Read RESULTS.md §E and §I before proposing anything.
+
+## Roadmap (revised after second empirical pass - 2026-04-20;
+## closed out after the Round 4-5 audit - 2026-09-01)
 
 Done:
 - [x] DFA + modified R/S estimators, validated on synthetic fBm and AR(1).
@@ -354,24 +372,46 @@ Done:
 Nearly pointless given accumulated null findings:
 - [ ] S3 Lo-filtered trend universe.
 
-Still open:
+Still open (and none of it is worth doing for alpha):
 - [ ] Carr-Madan BS/Heston pricer (B1) - purely educational at this point.
 - [ ] Rebuild with a bias-free data source (CRSP / Sharadar) to see if
-  survivorship was hiding real weak alpha. Unlikely but untested.
+  survivorship was hiding real weak alpha. **Now clearly not worth it:**
+  survivorship biases Sharpes *upward*, so removing it can only make the
+  nulls more negative. It would only matter if something had rejected.
+- [ ] Obtain 2011-2013 BTC daily history (Bitstamp / CoinDesk) to finish
+  the Bariviera replication. This is the *only* remaining item with any
+  scientific interest - it is the one place a published positive is
+  claimed and our data cannot reach. It is a replication, not a strategy;
+  even if H > 0.55 held in 2011-2013, that market no longer exists.
+
+Done, Round 5:
+- [x] **Bariviera (2017) BTC replication** (script 13). The persistent era
+  is outside yfinance's history (BTC-USD starts 2014-09-17). On 2014-2026
+  rolling 500-day H has std 0.033 against a 0.062 noise floor; 2/185
+  windows breach the 95% no-memory band. Full-sample H = 0.562 is regime
+  mixing - no sub-period reproduces it, Lo's V = 1.545 does not reject.
+- [x] **Estimator power audit** (script 12). See STATUS above.
+- [x] **Cost model corrected.** Costs had been charged on a
+  gross-normalized turnover ratio instead of notional traded, halving
+  every transaction-cost charge. All net Sharpes restated; the GBM
+  crossed from +0.02 to -0.07.
 
 Closed:
 - [x] **Residualized Hurst.** R^2 of H ~ class + vol = 0.996 across
   ETFs. The cleaned residual has Sharpe -0.13 net, CI [-0.65, 0.38].
   Null.
-- [x] **MF-DFA Delta h on VIX as regime gate.** Gate Sharpe 0.70 vs BH
-  SPY 0.59 (+0.11). Bootstrap 95% CI on diff = [-0.30, +0.51]; p(diff>0)
-  = 0.68. Marginally positive, not statistically significant.
+- [x] **MF-DFA Delta h on VIX as regime gate. WAS LOOKAHEAD.** The
+  original gate thresholded Delta h on the *full-sample* median, so its
+  2008 decisions used 2026 data. With an expanding-window median the gate
+  earns Sharpe 0.36 against buy-and-hold's 0.62; the paired Sharpe
+  difference is **-0.26**, CI [-0.58, +0.07], p(diff>0) = 0.06. Negative.
+  (The superseded leaky figures were +0.11, CI [-0.30, +0.51].)
 - [x] **Intraday execution backtest.** VWAP-profile reduces variance
   ~20% vs uniform but mean saving is negligible and not significant.
   "Avoid open" is WORSE than uniform on mean cost (open vol cuts both
   ways).
 
-## The three lessons to encode going forward
+## The five lessons to encode going forward
 
 1. **Embargo every walk-forward CV.** The GBM embargo bug (Sharpe 1.84 ->
    0.015 after fix) is the single most valuable methodological artifact
@@ -382,5 +422,21 @@ Closed:
 3. **Residualize before celebrating.** H on ETFs has R^2 = 0.996 vs
    asset class + vol. Any cross-sectional factor you propose has to be
    shown to add information on top of trivial confounds.
+4. **Measure the estimator's noise floor before believing any dispersion
+   you sort on.** This is the lesson that subsumes the others, and it was
+   computable on day one: simulate the estimator on a series with the
+   known null value at *the exact sample size you will use*, and compare
+   its standard error to the dispersion you observe. If the observed
+   dispersion is below the floor - as it was here, 0.056 against 0.062 -
+   the experiment cannot produce an informative answer either way, and
+   the resulting "null" says nothing about the hypothesis. Corollary:
+   never read a rolling-Hurst chart that has no noise band drawn on it.
+5. **Audit *every* threshold for full-sample contamination, not just the
+   train/test split.** The embargo bug was caught in Round 3; the VIX
+   gate's full-sample median survived two more rounds because it did not
+   look like a train/test boundary. Any median, quantile, z-score,
+   standardization or vol-target computed over the whole sample is
+   lookahead. Grep for `.median()`, `.mean()`, `.std()`, `.quantile()`
+   on a full series and ask what date each one is knowable.
 
 Updates are appended to [`RESULTS.md`](RESULTS.md).
