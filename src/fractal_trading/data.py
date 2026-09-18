@@ -5,7 +5,6 @@ Downloads adjusted-close prices for a ticker list and caches them to
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pandas as pd

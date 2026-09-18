@@ -27,7 +27,6 @@ import pandas as pd
 from fractal_trading.backtest import paired_sharpe_diff_ci, sharpe_ci
 from fractal_trading.data import load_prices
 from fractal_trading.mfdfa import mfdfa
-from fractal_trading.hurst import dfa
 
 
 REPO = Path(__file__).resolve().parents[1]

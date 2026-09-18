@@ -21,7 +21,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import numpy as np
 import pandas as pd
 
 from fractal_trading.backtest import cross_sectional_sort_backtest, rolling_factor
